@@ -1,42 +1,68 @@
 import { InsertVehicle } from '@shared/schema';
 import * as cheerio from 'cheerio';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // Configuration for Nova Autoland scraper
 const NOVA_AUTOLAND_CONFIG = {
   baseUrl: 'https://novaautoland.com',
   inventoryPath: '/inventory?clearall=1',
   maxPagesToScrape: 20,
-  requestTimeout: 10000, // 10 seconds
+  requestTimeout: 15000, // 15 seconds
+  rateLimit: 2000, // ms between requests
+  maxConcurrentRequests: 2,
   userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   headers: {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
     'Accept-Language': 'en-US,en;q=0.9',
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache',
-    'Referer': 'https://www.google.com/'
+    'Referer': 'https://www.google.com/',
+    'Accept-Encoding': 'gzip, deflate, br'
+  },
+  debug: process.env.NODE_ENV !== 'production',
+  debugLimit: 3,
+  proxy: {
+    enabled: process.env.USE_PROXY === 'true',
+    url: process.env.PROXY_URL || 'http://your-proxy:port',
+    auth: {
+      username: process.env.PROXY_USERNAME || '',
+      password: process.env.PROXY_PASSWORD || ''
+    }
   }
 };
 
 export async function scrapeNovaAutoland(dealershipUrl, dealershipId, dealershipName) {
   try {
+    if (NOVA_AUTOLAND_CONFIG.debug) {
+      console.log('DEBUG MODE ENABLED - LIMITED SCRAPING');
+    }
+    
     console.log(`Starting scrape of Nova Autoland inventory`);
     
     const inventoryUrl = new URL(NOVA_AUTOLAND_CONFIG.inventoryPath, NOVA_AUTOLAND_CONFIG.baseUrl).toString();
-    const vehicleUrls = await getAllVehicleUrls(inventoryUrl);
+    let vehicleUrls = await getAllVehicleUrls(inventoryUrl);
+    
+    if (NOVA_AUTOLAND_CONFIG.debug && NOVA_AUTOLAND_CONFIG.debugLimit) {
+      vehicleUrls = vehicleUrls.slice(0, NOVA_AUTOLAND_CONFIG.debugLimit);
+      console.log(`DEBUG: Limited to ${vehicleUrls.length} vehicles`);
+    }
     
     console.log(`Found ${vehicleUrls.length} vehicle listings`);
     
     const vehicles = [];
-    for (const url of vehicleUrls) {
-      try {
-        console.log(`Scraping vehicle listing: ${url}`);
-        const vehicle = await scrapeVehicleDetails(url, dealershipId, dealershipName);
-        if (vehicle) {
-          vehicles.push(vehicle);
-          console.log(`Successfully scraped vehicle: ${vehicle.make} ${vehicle.model} (${vehicle.year})`);
-        }
-      } catch (error) {
-        console.error(`Error processing vehicle listing: ${error}`);
+    const scrapingPromises = [];
+    
+    // Process vehicles with concurrency control
+    for (let i = 0; i < vehicleUrls.length; i += NOVA_AUTOLAND_CONFIG.maxConcurrentRequests) {
+      const batch = vehicleUrls.slice(i, i + NOVA_AUTOLAND_CONFIG.maxConcurrentRequests);
+      const batchPromises = batch.map(url => 
+        scrapeVehicleWithDelay(url, dealershipId, dealershipName, i * NOVA_AUTOLAND_CONFIG.rateLimit)
+      );
+      const batchResults = await Promise.all(batchPromises);
+      vehicles.push(...batchResults.filter(v => v));
+      
+      if (NOVA_AUTOLAND_CONFIG.debug && vehicles.length >= NOVA_AUTOLAND_CONFIG.debugLimit) {
+        break; // Early exit in debug mode
       }
     }
     
@@ -45,6 +71,21 @@ export async function scrapeNovaAutoland(dealershipUrl, dealershipId, dealership
   } catch (error) {
     console.error(`Error scraping Nova Autoland:`, error);
     return [];
+  }
+}
+
+async function scrapeVehicleWithDelay(url, dealershipId, dealershipName, delay) {
+  await new Promise(resolve => setTimeout(resolve, delay));
+  try {
+    console.log(`Scraping vehicle listing: ${url}`);
+    const vehicle = await scrapeVehicleDetails(url, dealershipId, dealershipName);
+    if (vehicle) {
+      console.log(`Successfully scraped vehicle: ${vehicle.make} ${vehicle.model} (${vehicle.year})`);
+      return vehicle;
+    }
+  } catch (error) {
+    console.error(`Error processing vehicle listing: ${error}`);
+    return null;
   }
 }
 
@@ -80,6 +121,9 @@ async function getAllVehicleUrls(inventoryUrl) {
         console.log(`Reached maximum pages to scrape (${NOVA_AUTOLAND_CONFIG.maxPagesToScrape})`);
         break;
       }
+      
+      // Rate limiting between page requests
+      await new Promise(resolve => setTimeout(resolve, NOVA_AUTOLAND_CONFIG.rateLimit));
     } catch (error) {
       console.error(`Error processing inventory page ${currentPageUrl}:`, error);
       break;
@@ -90,27 +134,51 @@ async function getAllVehicleUrls(inventoryUrl) {
 }
 
 async function fetchWithRetry(url, retries = 3) {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), NOVA_AUTOLAND_CONFIG.requestTimeout);
-    
-    const response = await fetch(url, {
-      headers: {
-        ...NOVA_AUTOLAND_CONFIG.headers,
-        'User-Agent': NOVA_AUTOLAND_CONFIG.userAgent
-      },
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeout);
-    return response;
-  } catch (error) {
-    if (retries > 0) {
-      console.log(`Retrying fetch for ${url} (${retries} retries left)`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      return fetchWithRetry(url, retries - 1);
+  for (let i = 0; i < retries; i++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), NOVA_AUTOLAND_CONFIG.requestTimeout);
+      
+      const fetchOptions = {
+        headers: {
+          ...NOVA_AUTOLAND_CONFIG.headers,
+          'User-Agent': NOVA_AUTOLAND_CONFIG.userAgent
+        },
+        signal: controller.signal
+      };
+      
+      // Add proxy if enabled
+      if (NOVA_AUTOLAND_CONFIG.proxy.enabled) {
+        fetchOptions.agent = new HttpsProxyAgent({
+          host: NOVA_AUTOLAND_CONFIG.proxy.url,
+          auth: `${NOVA_AUTOLAND_CONFIG.proxy.auth.username}:${NOVA_AUTOLAND_CONFIG.proxy.auth.password}`
+        });
+      }
+      
+      const response = await fetch(url, fetchOptions);
+      clearTimeout(timeout);
+      
+      // Handle special status codes
+      if (response.status === 403) {
+        throw new Error('Blocked by security (403)');
+      }
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('Retry-After') || 5;
+        await new Promise(r => setTimeout(r, retryAfter * 1000));
+        continue;
+      }
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error ${response.status}`);
+      }
+      
+      return response;
+    } catch (error) {
+      if (i === retries - 1) throw error;
+      const delay = 1000 * (i + 1);
+      console.log(`Retrying fetch for ${url} in ${delay}ms (${retries - i - 1} retries left)`);
+      await new Promise(r => setTimeout(r, delay));
     }
-    throw error;
   }
 }
 
@@ -187,6 +255,7 @@ async function scrapeVehicleDetails(url, dealershipId, dealershipName) {
     const description = extractDescription($);
     const imageUrls = extractImages($, url);
     const carfaxUrl = enhancedExtractCarfaxUrl($, url, vin);
+    const features = extractFeatures($);
     
     // Construct the vehicle object
     const vehicle = {
@@ -198,12 +267,21 @@ async function scrapeVehicleDetails(url, dealershipId, dealershipName) {
       year,
       price,
       mileage,
+      exteriorColor,
+      interiorColor,
+      bodyType,
+      fuelType,
+      transmission,
+      drivetrain,
+      description,
       location: 'McLean, VA',
       zipCode: '22102',
       images: imageUrls,
       carfaxUrl: carfaxUrl || undefined,
-      contactUrl: url, // Using the listing URL as contact URL
-      originalListingUrl: url
+      contactUrl: url,
+      originalListingUrl: url,
+      features,
+      scrapedAt: new Date().toISOString()
     };
     
     return vehicle;
@@ -553,12 +631,35 @@ function extractTechnicalDetails($) {
   return { bodyType, fuelType, transmission, drivetrain };
 }
 
-/**
- * Enhanced function to extract Carfax URLs using multiple methods and fallbacks
- * Works across different dealer website structures
- */
+function extractFeatures($) {
+  const features = [];
+  const featureGroups = {};
+  
+  // Extract from feature lists
+  $('.features-list li, .vehicle-features li, .specs-list li').each((_, el) => {
+    const feature = $(el).text().trim();
+    if (feature) features.push(feature);
+  });
+  
+  // Extract from specification tables
+  $('table.specs tr').each((_, row) => {
+    const cols = $(row).find('td');
+    if (cols.length === 2) {
+      const key = $(cols[0]).text().trim().replace(':', '');
+      const value = $(cols[1]).text().trim();
+      if (key && value) {
+        featureGroups[key] = value;
+      }
+    }
+  });
+  
+  return {
+    individualFeatures: features,
+    featureGroups
+  };
+}
+
 function enhancedExtractCarfaxUrl($, pageUrl, vin) {
-  // Start with null carfax URL
   let carfaxUrl = null;
   
   // Method 1: Direct link with carfax in URL or text
@@ -566,13 +667,7 @@ function enhancedExtractCarfaxUrl($, pageUrl, vin) {
     if (carfaxUrl) return;
     
     const href = $(element).attr('href');
-    
-    // Validate it's a Carfax URL
-    if (href && 
-        (href.includes('carfax.com') || 
-         href.includes('carfax') ||
-         href.toLowerCase().includes('vehicle-history'))) {
-      console.log(`Found direct Carfax link: ${href}`);
+    if (href && (href.includes('carfax.com') || href.includes('carfax'))) {
       carfaxUrl = href;
     }
   });
@@ -584,7 +679,6 @@ function enhancedExtractCarfaxUrl($, pageUrl, vin) {
       
       const href = $(element).attr('href');
       if (href && (href.includes('carfax.com') || href.includes('carfax'))) {
-        console.log(`Found Carfax image link: ${href}`);
         carfaxUrl = href;
       }
     });
@@ -592,61 +686,12 @@ function enhancedExtractCarfaxUrl($, pageUrl, vin) {
   
   // Method 3: Look for "View Carfax" or similar links
   if (!carfaxUrl) {
-    $('a:contains("View CARFAX"), a:contains("View Carfax"), a:contains("View Report"), a:contains("History Report"), a:contains("Vehicle History"), a:contains("Check History")').each((_, element) => {
+    $('a:contains("View CARFAX"), a:contains("View Carfax"), a:contains("View Report")').each((_, element) => {
       if (carfaxUrl) return;
       
       const href = $(element).attr('href');
       if (href && href.length > 10) {
-        console.log(`Found View Carfax link: ${href}`);
         carfaxUrl = href;
-      }
-    });
-  }
-  
-  // Method 4: Look for JSON-LD data that might contain a Carfax URL
-  if (!carfaxUrl) {
-    $('script[type="application/ld+json"]').each((_, element) => {
-      if (carfaxUrl) return;
-      
-      try {
-        const json = JSON.parse($(element).html());
-        if (json.url && typeof json.url === 'string' && 
-            (json.url.includes('carfax') || json.url.includes('history'))) {
-          console.log(`Found Carfax URL in JSON-LD: ${json.url}`);
-          carfaxUrl = json.url;
-        }
-      } catch (e) {
-        // JSON parsing failed, ignore
-      }
-    });
-  }
-  
-  // Method 5: Look for onclick handlers that might contain Carfax URLs
-  if (!carfaxUrl) {
-    $('[onclick*="carfax"], [onclick*="history"]').each((_, element) => {
-      if (carfaxUrl) return;
-      
-      const onclick = $(element).attr('onclick') || '';
-      const urlMatch = onclick.match(/['"]https?:\/\/[^'"]*carfax[^'"]*['"]/i);
-      if (urlMatch && urlMatch[0]) {
-        const extractedUrl = urlMatch[0].replace(/^['"]|['"]$/g, '');
-        console.log(`Found Carfax URL in onclick handler: ${extractedUrl}`);
-        carfaxUrl = extractedUrl;
-      }
-    });
-  }
-  
-  // Method 6: Look for data attributes
-  if (!carfaxUrl) {
-    $('[data-carfax-url], [data-history-url], [data-report-url]').each((_, element) => {
-      if (carfaxUrl) return;
-      
-      const dataUrl = $(element).attr('data-carfax-url') || 
-                    $(element).attr('data-history-url') || 
-                    $(element).attr('data-report-url');
-      if (dataUrl) {
-        console.log(`Found Carfax URL in data attribute: ${dataUrl}`);
-        carfaxUrl = dataUrl;
       }
     });
   }
@@ -654,37 +699,18 @@ function enhancedExtractCarfaxUrl($, pageUrl, vin) {
   // If we have a VIN but no Carfax URL, construct one
   if (vin && !carfaxUrl) {
     carfaxUrl = `https://www.carfax.com/VehicleHistory/p/Report.cfx?partner=DEA_0&vin=${vin}`;
-    console.log(`Constructed Carfax URL for VIN ${vin}: ${carfaxUrl}`);
   }
   
-  // If we have a Carfax URL but it doesn't have the VIN, add it
-  if (carfaxUrl && vin && !carfaxUrl.includes(vin)) {
-    // Check if it's already a valid Carfax URL or just a relative path
-    if (carfaxUrl.includes('carfax.com')) {
-      // It's already a valid URL, just need to check if the VIN is needed
-      if (!carfaxUrl.includes('vin=')) {
-        carfaxUrl = `${carfaxUrl}${carfaxUrl.includes('?') ? '&' : '?'}vin=${vin}`;
-      }
-    } else if (carfaxUrl.startsWith('/')) {
-      // It's a relative path, construct an absolute URL
-      try {
-        const baseUrl = new URL(pageUrl).origin;
-        carfaxUrl = `${baseUrl}${carfaxUrl}`;
-      } catch (e) {
-        // Invalid URL, fallback to constructing a standard Carfax URL
-        carfaxUrl = `https://www.carfax.com/VehicleHistory/p/Report.cfx?partner=DEA_0&vin=${vin}`;
-      }
-    } else {
-      // It doesn't look like a valid URL, construct a standard Carfax URL
+  // Ensure URL is absolute
+  if (carfaxUrl && !carfaxUrl.startsWith('http')) {
+    try {
+      carfaxUrl = new URL(carfaxUrl, NOVA_AUTOLAND_CONFIG.baseUrl).toString();
+    } catch (e) {
       carfaxUrl = `https://www.carfax.com/VehicleHistory/p/Report.cfx?partner=DEA_0&vin=${vin}`;
     }
   }
   
-  if (carfaxUrl) {
-    console.log(`Extracted Carfax URL for ${vin}: ${carfaxUrl}`);
-  }
-  
-  return carfaxUrl;
+  return carfaxUrl || undefined;
 }
 
 function extractDescription($) {
@@ -706,7 +732,7 @@ function extractDescription($) {
       if (description) return;
       
       const content = $(element).attr('content');
-      if (content && content.length > 10 && !content.includes('dealership') && !content.includes('car dealer')) {
+      if (content && content.length > 10) {
         description = content;
       }
     });
@@ -719,26 +745,13 @@ function extractImages($, baseUrl) {
   const images = [];
   const processedUrls = new Set();
   
-  // Find all image elements in typical vehicle gallery structures
-  $('.vehicle-images img, .carousel img, .slider img, .gallery img, .thumbnail img, [data-gallery] img').each((_, element) => {
-    // Get appropriate attribute for image URL
+  // Find all image elements
+  $('.vehicle-images img, .carousel img, .slider img, .gallery img').each((_, element) => {
     let src = $(element).attr('data-src') || $(element).attr('src');
     
-    // Sometimes image URLs are in data attributes for lazy loading
-    if (!src) {
-      const keys = Object.keys(element.attribs || {});
-      const dataImgAttr = keys.find(key => key.startsWith('data-') && key.includes('img'));
-      if (dataImgAttr) {
-        src = $(element).attr(dataImgAttr);
-      }
-    }
-    
-    if (src && isValidImageUrl(src) && !isPlaceholderImage(src) && !isNonVehicleImage(src)) {
+    if (src && isValidImageUrl(src) && !isPlaceholderImage(src)) {
       try {
-        // Convert to absolute URL if it's a relative path
         const absoluteUrl = new URL(src, baseUrl).toString();
-        
-        // Make sure we don't add duplicate images
         if (!processedUrls.has(absoluteUrl)) {
           processedUrls.add(absoluteUrl);
           images.push(absoluteUrl);
@@ -749,63 +762,19 @@ function extractImages($, baseUrl) {
     }
   });
   
-  // For image-heavy pages, limit to 20 images to prevent oversized objects
-  if (images.length > 20) {
-    console.log(`Limiting images from ${images.length} to 20`);
-    return images.slice(0, 20);
-  }
-  
-  return images;
+  return images.slice(0, 20); // Limit to 20 images
 }
 
 function isPlaceholderImage(src) {
-  // Check for common placeholder image patterns
   return src.includes('placeholder') || 
          src.includes('no-image') || 
-         src.includes('noimage') ||
-         src.includes('default') ||
-         src.includes('blank.gif') ||
-         src.includes('spacer.gif') ||
-         /\/[0-9]+x[0-9]+\.[a-z]+$/i.test(src);
-}
-
-function isNonVehicleImage(src) {
-  // Filter out common non-vehicle images
-  return src.includes('logo') || 
-         src.includes('badge') || 
-         src.includes('icon') ||
-         src.includes('button') ||
-         src.includes('banner') ||
-         src.includes('background') || 
-         src.includes('carfax');
+         src.includes('default');
 }
 
 function isValidImageUrl(url) {
-  const validExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
-  const parsedUrl = url.toLowerCase();
-  
-  // Check if URL ends with a valid image extension
-  if (validExtensions.some(ext => parsedUrl.endsWith(ext))) {
-    return true;
-  }
-  
-  // Check image CDN patterns that might not have extensions
-  if (
-    parsedUrl.includes('cloudfront.net') ||
-    parsedUrl.includes('dealercdn') ||
-    parsedUrl.includes('googleapis.com/') ||
-    parsedUrl.includes('dealercarsearch.com') ||
-    parsedUrl.includes('carimage') ||
-    parsedUrl.includes('photos') ||
-    parsedUrl.includes('images') ||
-    parsedUrl.includes('/img/') ||
-    parsedUrl.includes('/media/') ||
-    parsedUrl.includes('/vehicle-images/')
-  ) {
-    return true;
-  }
-  
-  return false;
+  const validExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
+  const lowerUrl = url.toLowerCase();
+  return validExtensions.some(ext => lowerUrl.endsWith(ext));
 }
 
 export default scrapeNovaAutoland;
