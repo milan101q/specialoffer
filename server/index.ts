@@ -48,22 +48,16 @@ app.use((req, res, next) => {
   });
 
   // Check environment and set up appropriate middleware
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
   } else {
     serveStatic(app);
   }
 
-  // Use PORT env var in production, fallback to 5000
-  const port = process.env.PORT || 5000;
-  server.listen({
-    port,
-    host: "0.0.0.0",
-    reusePort: true,
-  }, () => {
-    log(`serving on port ${port} in ${process.env.NODE_ENV || 'development'} mode`);
+  // ✅ FIXED: Standard Node-compatible .listen(port)
+  const port = Number(process.env.PORT) || 5000;
+
+  server.listen(port, () => {
+    log(`✅ Server is running on port ${port} in ${process.env.NODE_ENV || 'development'} mode`);
   });
 })();
