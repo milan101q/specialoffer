@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <rect width="800" height="600" fill="#f0f0f0"/>
+  <text x="400" y="300" font-family="Arial, sans-serif" font-size="24" text-anchor="middle" fill="#999">No Image Available</text>
+  <path d="M400,200 C450,200 480,230 500,250 C520,270 550,300 550,350 C550,400 520,430 500,450 C480,470 450,500 400,500 C350,500 320,470 300,450 C280,430 250,400 250,350 C250,300 280,270 300,250 C320,230 350,200 400,200 Z" fill="none" stroke="#ccc" stroke-width="10"/>
+  <path d="M320,350 L480,350 M350,300 L450,300 M350,400 L450,400" stroke="#ccc" stroke-width="10" stroke-linecap="round"/>
+</svg>

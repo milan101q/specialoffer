@@ -1,0 +1,273 @@
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useNavigate, useSearchParams, Link } from "react-router-dom";
+import Header from "@/components/Header";
+import VehicleCard from "@/components/VehicleCard";
+import FilterSystem from "@/components/FilterSystem";
+import { SimplePagination } from "@/components/SimplePagination";
+import { Vehicle, VehicleFilter } from "@shared/schema";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+// Extended Vehicle type with dealership information
+interface EnhancedVehicle extends Vehicle {
+  dealership?: {
+    id?: number;
+    name: string;
+    location?: string;
+  };
+}
+
+export default function Home() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  
+  // Get current page from URL or default to 1
+  const currentPage = searchParams.get('page') ? parseInt(searchParams.get('page')!) : 1;
+  
+  // Get current filter values from URL
+  const getFilterValues = (): VehicleFilter => {
+    return {
+      page: currentPage,
+      limit: searchParams.get('limit') ? parseInt(searchParams.get('limit')!) : 12,
+      sortBy: (searchParams.get('sortBy') as any) || 'relevance',
+      keyword: searchParams.get('keyword') || undefined,
+      yearMin: searchParams.get('yearMin') ? parseInt(searchParams.get('yearMin')!) : undefined,
+      yearMax: searchParams.get('yearMax') ? parseInt(searchParams.get('yearMax')!) : undefined,
+      priceMin: searchParams.get('priceMin') ? parseInt(searchParams.get('priceMin')!) : undefined,
+      priceMax: searchParams.get('priceMax') ? parseInt(searchParams.get('priceMax')!) : undefined,
+      mileageMin: searchParams.get('mileageMin') ? parseInt(searchParams.get('mileageMin')!) : undefined,
+      mileageMax: searchParams.get('mileageMax') ? parseInt(searchParams.get('mileageMax')!) : undefined,
+      zipCode: searchParams.get('zipCode') || undefined,
+      distance: searchParams.get('distance') ? parseInt(searchParams.get('distance')!) : undefined,
+      make: searchParams.getAll('make').length > 0 ? searchParams.getAll('make') : undefined,
+      dealershipId: searchParams.get('dealershipId') ? parseInt(searchParams.get('dealershipId')!) : undefined
+    };
+  };
+  
+  const currentFilters = getFilterValues();
+  
+  // Query for vehicles with current filters
+  const { data, isLoading, isFetching } = useQuery<{
+    vehicles: EnhancedVehicle[];
+    totalCount: number;
+    currentPage: number;
+    totalPages: number;
+  }>({
+    queryKey: ['/api/vehicles', searchParams.toString()],
+    queryFn: async () => {
+      console.log("Fetching with query:", searchParams.toString(), "Page:", currentPage);
+      const response = await fetch(`/api/vehicles?${searchParams.toString()}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch vehicles');
+      }
+      const result = await response.json();
+      console.log("Received page:", result.currentPage, "of", result.totalPages);
+      return result;
+    },
+    staleTime: 0,
+    refetchOnWindowFocus: false
+  });
+  
+  // Update search params with new filters
+  const updateFilters = (newFilters: Partial<VehicleFilter>) => {
+    const updatedParams = new URLSearchParams(searchParams);
+    
+    // Handle page parameter
+    if (newFilters.page !== undefined) {
+      if (newFilters.page > 1) {
+        updatedParams.set('page', newFilters.page.toString());
+      } else {
+        updatedParams.delete('page');
+      }
+    }
+    
+    // Handle keyword parameter
+    if (newFilters.keyword !== undefined) {
+      if (newFilters.keyword) {
+        updatedParams.set('keyword', newFilters.keyword);
+      } else {
+        updatedParams.delete('keyword');
+      }
+    }
+    
+    // Handle make parameter (array)
+    if (newFilters.make !== undefined) {
+      // Clear existing make params
+      updatedParams.delete('make');
+      
+      // Add all makes if they exist
+      if (newFilters.make && newFilters.make.length > 0) {
+        newFilters.make.forEach(make => {
+          updatedParams.append('make', make);
+        });
+      }
+    }
+    
+    // Handle numeric parameters
+    const numericParams: Array<keyof VehicleFilter> = [
+      'yearMin', 'yearMax', 'priceMin', 'priceMax', 
+      'mileageMin', 'mileageMax', 'distance', 'dealershipId'
+    ];
+    
+    numericParams.forEach(param => {
+      if (newFilters[param] !== undefined) {
+        if (newFilters[param]) {
+          updatedParams.set(param, newFilters[param]!.toString());
+        } else {
+          updatedParams.delete(param);
+        }
+      }
+    });
+    
+    // Handle sort parameter
+    if (newFilters.sortBy !== undefined) {
+      if (newFilters.sortBy !== 'relevance') {
+        updatedParams.set('sortBy', newFilters.sortBy);
+      } else {
+        updatedParams.delete('sortBy');
+      }
+    }
+    
+    // Handle limit parameter
+    if (newFilters.limit !== undefined && newFilters.limit !== 12) {
+      updatedParams.set('limit', newFilters.limit.toString());
+    }
+    
+    // Reset to page 1 if changing filters other than page
+    if (newFilters.page === undefined) {
+      updatedParams.delete('page');
+    }
+    
+    // Update search params
+    setSearchParams(updatedParams);
+    
+    // Scroll to top when changing pages
+    if (newFilters.page !== undefined) {
+      window.scrollTo(0, 0);
+    }
+  };
+  
+  // Handle search from header
+  const handleSearch = (keyword: string) => {
+    updateFilters({ keyword, page: 1 });
+  };
+  
+  // Handle filter changes
+  const handleFilterChange = (newFilters: Partial<VehicleFilter>) => {
+    updateFilters({ ...newFilters, page: 1 });
+  };
+  
+  // Handle pagination
+  const handlePageChange = (page: number) => {
+    if (page === currentPage) return;
+    console.log(`Changing to page ${page}`);
+    updateFilters({ page });
+  };
+  
+  const isSearching = isLoading || isFetching;
+
+  return (
+    <div className="bg-neutral-100 min-h-screen">
+      <Header 
+        onSearch={handleSearch} 
+        onFilterToggle={() => setIsFilterOpen(!isFilterOpen)}
+        isFilterOpen={isFilterOpen}
+        initialSearchValue={currentFilters.keyword || ""}
+      />
+      
+      <FilterSystem 
+        isOpen={isFilterOpen} 
+        onFilterChange={handleFilterChange}
+        currentFilters={currentFilters}
+      />
+      
+      <main className="container mx-auto px-4 py-8">
+        {/* Results Header */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
+          <div>
+            <h1 className="text-2xl font-bold text-neutral-900">Available Vehicles</h1>
+            <p className="text-neutral-600">
+              {isSearching 
+                ? "Loading vehicles..." 
+                : `Showing ${data?.vehicles.length || 0} of ${data?.totalCount || 0} vehicles matching your criteria`}
+            </p>
+          </div>
+          
+          <div className="mt-4 md:mt-0 flex items-center">
+            <span className="text-neutral-700 mr-2">Sort by:</span>
+            <Select
+              value={currentFilters.sortBy || 'relevance'}
+              onValueChange={(value) => handleFilterChange({ sortBy: value as any })}
+            >
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Sort by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="relevance">Relevance</SelectItem>
+                <SelectItem value="price_low">Price: Low to High</SelectItem>
+                <SelectItem value="price_high">Price: High to Low</SelectItem>
+                <SelectItem value="year_new">Year: Newest First</SelectItem>
+                <SelectItem value="mileage_low">Mileage: Low to High</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        
+        {/* Vehicle Grid */}
+        {isSearching ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {[...Array(8)].map((_, i) => (
+              <div key={i} className="bg-white rounded-xl shadow-md h-96 animate-pulse">
+                <div className="bg-gray-300 h-60 rounded-t-xl"></div>
+                <div className="p-4">
+                  <div className="bg-gray-300 h-6 w-3/4 mb-2 rounded"></div>
+                  <div className="bg-gray-300 h-6 w-1/4 mb-4 rounded"></div>
+                  <div className="space-y-2">
+                    <div className="bg-gray-300 h-4 w-2/3 rounded"></div>
+                    <div className="bg-gray-300 h-4 w-1/2 rounded"></div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <>
+            {data?.vehicles && data.vehicles.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {data.vehicles.map((vehicle) => (
+                  <VehicleCard 
+                    key={vehicle.id}
+                    vehicle={vehicle}
+                    onClick={() => navigate(`/vehicles/${vehicle.id}`)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <h3 className="text-xl font-semibold mb-2">No vehicles found</h3>
+                <p className="text-neutral-600">Try changing your search criteria or filters</p>
+              </div>
+            )}
+          </>
+        )}
+        
+        {/* Pagination */}
+        {data && data.totalPages > 1 && (
+          <div className="mt-10 flex justify-center">
+            <div className="flex flex-col items-center">
+              <SimplePagination
+                currentPage={currentPage}
+                totalPages={data.totalPages}
+                onPageChange={handlePageChange}
+              />
+              <div className="text-sm text-gray-500 mt-2">
+                Page {currentPage} of {data.totalPages}
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
