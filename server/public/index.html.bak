@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nova Autoland Promotional Banner Demo</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 p-8">
+  <div class="max-w-4xl mx-auto">
+    <h1 class="text-3xl font-bold mb-8 text-center">Nova Autoland Promotional Banner Demo</h1>
+    
+    <div class="bg-white rounded-lg shadow-md overflow-hidden mb-8">
+      <div class="aspect-video bg-gray-200 relative">
+        <img 
+          src="https://imagescdn.dealercarsearch.com/Media/23726/22303830/638811988519848181.jpg" 
+          alt="2004 Toyota RAV4"
+          class="w-full h-full object-cover"
+        />
+        <div class="absolute top-2 right-2 bg-white py-1 px-2 rounded text-sm font-bold">
+          $7,495
+        </div>
+      </div>
+      
+      <div class="p-4">
+        <!-- Nova Autoland Promotion Banner -->
+        <div class="mb-3">
+          <div class="relative overflow-hidden bg-[#0a2158] text-white p-3 rounded">
+            <div class="absolute top-0 left-0 h-full w-[60px] bg-[#ff6c00] opacity-20"></div>
+            
+            <div class="relative z-10">
+              <div class="font-bold text-lg mb-1">4-Month Warranty!</div>
+              <div class="text-sm">Free Oil Change • Free Brake Pads • Free Battery</div>
+            </div>
+            
+            <div class="absolute right-3 bottom-3">
+              <div class="bg-[#ff6c00] text-white text-xs font-bold py-1 px-3 rounded-full">
+                LIMITED TIME OFFER
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="flex justify-between items-start">
+          <h3 class="text-lg font-semibold text-neutral-900 truncate">2004 Toyota RAV4</h3>
+          <span class="text-lg font-bold text-blue-600">$7,495</span>
+        </div>
+        
+        <div class="mt-2 space-y-2">
+          <div class="flex items-center text-neutral-600 text-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z"></path>
+              <path d="M16.8 13a4 4 0 1 1-8 0"></path>
+              <path d="M12 22V20"></path>
+              <path d="M12 4v4"></path>
+              <path d="M12 8v4h4"></path>
+            </svg>
+            <span>86,921 miles</span>
+          </div>
+          
+          <div class="flex items-center text-neutral-600 text-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 21h18"></path>
+              <path d="M19 21v-4"></path>
+              <path d="M19 17a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2"></path>
+              <path d="M11 17v-6"></path>
+              <path d="M7 17v-6"></path>
+              <path d="M13 7V3h8v4"></path>
+              <path d="M13 7h8"></path>
+            </svg>
+            <span>Nova Autoland</span>
+          </div>
+          
+          <div class="flex items-center text-neutral-600 text-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path>
+              <circle cx="12" cy="10" r="3"></circle>
+            </svg>
+            <span>Chantilly, VA</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="bg-white p-6 rounded-lg shadow-md">
+      <h2 class="text-xl font-bold mb-4">Implementation Details:</h2>
+      <p class="mb-4">This is a demonstration of how the Nova Autoland promotional banner appears on vehicle cards from Nova Autoland dealership. The actual implementation includes:</p>
+      
+      <ul class="list-disc pl-6 mb-4 space-y-2">
+        <li>Dynamic detection of Nova Autoland vehicles in the <code class="bg-gray-100 px-1 rounded">SafeVehicleCard</code> and <code class="bg-gray-100 px-1 rounded">VehicleCard</code> components</li>
+        <li>Responsive design that works on both mobile and desktop layouts</li>
+        <li>Eye-catching navy blue background with orange accents</li>
+        <li>Clear presentation of the warranty and free services</li>
+        <li>Attention-grabbing "LIMITED TIME OFFER" badge</li>
+      </ul>
+      
+      <p>The banner only appears for vehicles from Nova Autoland dealership. All other dealership vehicles will not show this promotional banner.</p>
+    </div>
+  </div>
+</body>
+</html>

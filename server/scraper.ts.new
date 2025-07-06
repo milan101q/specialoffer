@@ -1,0 +1,117 @@
+// This is a simplified Nova Autoland scraper
+async function scrapeNovaAutolandVehicle(url: string, dealershipId: number, dealershipName: string): Promise<InsertVehicle | null> {
+  console.log(`Processing Nova Autoland vehicle: ${url}`);
+  
+  // Default values for vehicle
+  let make = '';
+  let model = '';
+  let year = 0;
+  let price = 0;
+  let mileage = 0;
+  let title = '';
+  let vin = '';
+  let images: string[] = [];
+  
+  try {
+    const headers: HeadersInit = {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Referer': url.includes('/') ? url.split('/').slice(0, 3).join('/') + '/inventory' : 'https://www.google.com/'
+    };
+    
+    const response = await fetch(url, { headers, redirect: 'follow' });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch vehicle detail page: ${response.statusText}`);
+    }
+    
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    
+    // Extract vehicle data here...
+    
+    // Extract images - focus on this part for Nova Autoland
+    const imageSelectors = ['img.vehicle-img', '.image-gallery img', '[data-src]'];
+    
+    for (const selector of imageSelectors) {
+      const imgElements = $(selector);
+      
+      if (imgElements.length > 0) {
+        console.log(`Found ${imgElements.length} images with selector ${selector}`);
+        
+        imgElements.each((_, elem) => {
+          const src = $(elem).attr('src') || $(elem).attr('data-src') || $(elem).attr('data-lazy-src');
+          if (src && !src.includes('noimage') && !src.includes('no-image') && 
+              !src.includes('placeholder') && !src.includes('data:image/svg')) {
+            
+            // Make sure the URL is absolute
+            let imgUrl = src;
+            if (src.startsWith('/')) {
+              const baseUrl = url.split('/').slice(0, 3).join('/');
+              imgUrl = baseUrl + src;
+            }
+            
+            if (!images.includes(imgUrl)) {
+              images.push(imgUrl);
+              console.log(`Added image: ${imgUrl}`);
+            }
+          }
+        });
+      }
+    }
+    
+    // Also search for specific Nova Autoland image patterns
+    const vehicleIdMatch = url.match(/\/vehicle\/(\d+)/i) || url.match(/\/(\d+)$/);
+    if (vehicleIdMatch && vehicleIdMatch[1]) {
+      const vehicleId = vehicleIdMatch[1];
+      
+      // Try these patterns for Nova Autoland images
+      const potentialPatterns = [
+        `https://novaautoland.com/photos/${vehicleId}/1.jpg`,
+        `https://photos.dealercarsearch.com/Media/NovaAutoland/${vehicleId}/1.jpg`,
+        `https://images.dealercarsearch.com/Media/NovaAutoland/${vehicleId}/1.jpg`,
+        `https://imagescdn.dealercarsearch.com/Media/NovaAutoland/${vehicleId}/1.jpg`
+      ];
+      
+      for (const pattern of potentialPatterns) {
+        if (!images.includes(pattern)) {
+          images.push(pattern);
+          console.log(`Added potential Nova Autoland image from pattern: ${pattern}`);
+        }
+      }
+    }
+    
+    // Add SVG placeholder as first image
+    if (images.length > 0) {
+      images.unshift('data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 4 3\'%3E%3C/svg%3E');
+    }
+    
+  } catch (error) {
+    console.error(`Error processing Nova Autoland vehicle: ${error}`);
+    return null;
+  }
+  
+  // Mock vehicle for testing
+  const vehicle: InsertVehicle = {
+    title: "Test Nova Autoland Vehicle",
+    price: 15000,
+    year: 2018,
+    make: "Toyota",
+    model: "Camry",
+    mileage: 45000,
+    vin: "TEST123456789" + Math.random().toString(36).substring(2, 7),
+    location: 'Nova Autoland, VA',
+    zipCode: '20151',
+    dealershipId,
+    images,
+    carfaxUrl: null,
+    contactUrl: null,
+    originalListingUrl: url,
+    sortOrder: 0
+  };
+  
+  return vehicle;
+}

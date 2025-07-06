@@ -1,0 +1,118 @@
+🚗 Project Brief: Multi-Dealer Car Listing Website with Smart Inventory Syncing
+
+Objective:
+Build a full-featured car listing platform that aggregates inventory from multiple dealership websites. The goal is to provide users with a fast, seamless, and intuitive way to search, filter, and view vehicle listings—while connecting them directly to verified dealership sources. The app will fetch vehicle data by parsing individual listing pages from dealer websites. If available, a Carfax link (typically shown under the vehicle photo) should also be captured.
+
+✅ Core Features
+🏪 Dealer Inventory Import (Auto-Scraper)
+Admin can input dealership website URLs via the dashboard.
+
+The platform automatically scrapes car details from each listing page, including:
+
+Year, Make, Model
+
+Mileage
+
+VIN number
+
+Price
+
+Location / ZIP code (scraped from listing)
+
+Photos
+
+Carfax report link (if available)
+
+Original listing URL (on dealer site)
+
+🔁 Real-Time Inventory Sync
+The system detects when a vehicle has been sold or removed from the dealership's website.
+
+Those vehicles should be automatically removed from the platform.
+
+This sync should run on a scheduled interval (e.g., every 2–6 hours).
+
+🖼️ Vehicle Listing Page
+Each car listing should display:
+
+Vehicle photos
+
+Title (e.g., “2018 Toyota Camry SE”)
+
+Year, Make, Model, Mileage, VIN, ZIP code
+
+View Carfax Report button (opens in new tab if link exists)
+
+Contact Seller button (links to original dealer page)
+
+🔍 Search & Filter System
+Search Bar (Top of Page):
+
+Users can search by:
+
+Keywords (e.g., “2020 Camry”)
+
+VIN
+
+Make/Model
+
+Year
+
+Filters (Sidebar or Dropdown):
+
+Make/Brand (multi-select)
+
+Year range
+
+Price range
+
+Mileage range
+
+ZIP code or location radius
+
+Sorting Options:
+
+Price (Low → High, High → Low)
+
+Year (Newest → Oldest)
+
+Mileage (Low → High)
+
+Search and filter results should dynamically update without page reload.
+
+🔧 Admin Dashboard
+🔐 Secure Login
+Admin must log in to access the dashboard.
+
+Default credentials:
+
+Username: Admin1
+
+Password: Milad@100
+
+📋 Admin Features
+Add a new dealership by entering its website URL.
+
+View a list of all connected dealership sources.
+
+Manually re-scrape or refresh a dealer’s inventory.
+
+Upload inventory data via CSV (fallback method in case scraping fails).
+
+Option to update/change admin credentials in future version.
+
+💡 Optional Features (Nice-to-Have)
+Save listings to “Favorites” (heart icon)
+
+Recently viewed vehicles
+
+Mobile-friendly responsive design
+
+Pagination or infinite scroll for listings
+
+Dealer profile pages (view all cars from a specific dealership)
+
+Lead tracking (log when “Contact Seller” is clicked)
+
+🧭 Summary
+This project will serve as a centralized, user-friendly car marketplace that automatically syncs live inventory from multiple dealerships websites. Users can find cars with verified info (including Carfax links), and contact sellers directly. Admins can easily manage dealer sources through a secure login and dashboard.

@@ -1,0 +1,2742 @@
+import { InsertVehicle } from '@shared/schema';
+import * as cheerio from 'cheerio';
+
+export async function scrapeDealership(dealershipUrl: string, dealershipId: number, dealershipName: string) {
+  console.log(`Starting scrape of dealership ${dealershipName} (ID: ${dealershipId}) at URL: ${dealershipUrl}`);
+  
+  try {
+    // Check if the dealership has anti-scraping protection
+    const isSuperBeeAuto = dealershipUrl.includes('superbeeauto') || dealershipName.toLowerCase().includes('super bee');
+    const isChantillyAuto = dealershipUrl.includes('chantillyautosales') || dealershipName.toLowerCase().includes('chantilly auto');
+    const needsEnhancedHeaders = isSuperBeeAuto || isChantillyAuto;
+    
+    // Set appropriate headers to mimic a real browser
+    const headers: HeadersInit = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Referer': 'https://www.google.com/'
+    };
+    
+    // Add additional headers for dealerships with anti-scraping protection
+    if (needsEnhancedHeaders) {
+      if (isSuperBeeAuto) {
+        console.log("Using enhanced anti-block measures for Super Bee Auto");
+        
+        Object.assign(headers, {
+          'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+          'Sec-Ch-Ua-Mobile': '?0',
+          'Sec-Ch-Ua-Platform': '"Windows"',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'none',
+          'Sec-Fetch-User': '?1',
+          'Upgrade-Insecure-Requests': '1',
+          'Connection': 'keep-alive'
+        });
+      } else if (isChantillyAuto) {
+        console.log("Using enhanced anti-block measures for Chantilly Auto Sales");
+        
+        // Use a different User-Agent for Chantilly Auto Sales to bypass their specific protection
+        Object.assign(headers, {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+          'Sec-Ch-Ua': '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+          'Sec-Ch-Ua-Mobile': '?0',
+          'Sec-Ch-Ua-Platform': '"macOS"',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'cross-site',
+          'Sec-Fetch-User': '?1',
+          'Upgrade-Insecure-Requests': '1',
+          'Connection': 'keep-alive'
+        });
+      } else {
+        // For other dealerships that need enhanced headers but not specific customization
+        Object.assign(headers, {
+          'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+          'Sec-Ch-Ua-Mobile': '?0',
+          'Sec-Ch-Ua-Platform': '"Windows"',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'none',
+          'Sec-Fetch-User': '?1',
+          'Upgrade-Insecure-Requests': '1',
+          'Connection': 'keep-alive'
+        });
+      }
+    }
+    
+    const response = await fetch(dealershipUrl, { 
+      headers,
+      redirect: 'follow'
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch dealership website: ${response.statusText}`);
+    }
+    
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    
+    // Check for special case dealerships that need custom handling
+    const isNovaAutoland = dealershipUrl.includes('novaautoland') || dealershipName.toLowerCase().includes('nova');
+    // isSuperBeeAuto is already defined earlier
+    const isNumber1AutoGroup = dealershipUrl.includes('number1auto') || 
+                                dealershipName.toLowerCase().includes('number 1 auto') || 
+                                dealershipName.toLowerCase().includes('number one auto');
+    const isEpicMotor = dealershipUrl.includes('epicmotorcompany') || dealershipName.toLowerCase().includes('epic motor');
+    const isAutoGalleria = dealershipUrl.includes('autogalleriava') || dealershipName.toLowerCase().includes('auto galleria');
+    console.log(`Dealership detection: ${dealershipName} - Nova Autoland: ${isNovaAutoland}, Super Bee Auto: ${isSuperBeeAuto}, Number 1 Auto Group: ${isNumber1AutoGroup}, Epic Motor: ${isEpicMotor}, Auto Galleria: ${isAutoGalleria}`);
+    
+    // Store all vehicle listing URLs
+    const vehicleListingUrls: string[] = [];
+    
+    // Find the inventory page link - often in the navigation
+    let inventoryPageUrl: string | null = null;
+    
+    // Try to find inventory page
+    $('a').each((_, element) => {
+      const href = $(element).attr('href');
+      const text = $(element).text().toLowerCase().trim();
+      
+      if (href && (
+        text.includes('inventory') || 
+        text.includes('vehicles') || 
+        text.includes('used cars') || 
+        text.includes('pre-owned') ||
+        text.includes('new cars') ||
+        href.includes('/inventory') || 
+        href.includes('/vehicles') || 
+        href.includes('/used') ||
+        href.includes('/pre-owned') ||
+        href.includes('/cars')
+      )) {
+        try {
+          // Make relative URLs absolute
+          const absoluteUrl = new URL(href, dealershipUrl).toString();
+          
+          // Only set inventory page if we haven't found one yet or if this one is more likely to be the main inventory
+          if (!inventoryPageUrl || (
+            // Prioritize URLs that are more likely to be the main inventory page
+            (href.includes('/inventory') || href.includes('/vehicles') || text === 'inventory') && 
+            !inventoryPageUrl.includes('/inventory')
+          )) {
+            inventoryPageUrl = absoluteUrl;
+            console.log(`Found potential inventory page: ${inventoryPageUrl}`);
+          }
+        } catch (e) {
+          console.log(`Invalid inventory URL: ${href}`);
+        }
+      }
+    });
+    
+    // Special case for Number 1 Auto Group - they use a specific URL pattern for inventory
+    if (isNumber1AutoGroup) {
+      inventoryPageUrl = `${dealershipUrl}/newandusedcars?clearall=1`;
+      console.log(`Using Number 1 Auto Group specific inventory URL: ${inventoryPageUrl}`);
+      
+      // For Number 1 Auto Group, we need to directly extract vehicle links from the inventory page
+      try {
+        console.log(`Specially handling Number 1 Auto Group inventory page...`);
+        const inventoryResponse = await fetch(inventoryPageUrl);
+        const inventoryHtml = await inventoryResponse.text();
+        const $inventory = cheerio.load(inventoryHtml);
+        
+        // Find all vehicle listings in i08r-invBox containers
+        $inventory('.i08r-invBox').each((_, element) => {
+          // Find the VDP link which contains the vehicle details page URL
+          const vdpLinks = $inventory(element).find('a[href*="/vdp/"]');
+          if (vdpLinks.length > 0) {
+            const href = $inventory(vdpLinks[0]).attr('href');
+            if (href) {
+              try {
+                const absoluteUrl = new URL(href, dealershipUrl).toString();
+                if (!vehicleListingUrls.includes(absoluteUrl)) {
+                  vehicleListingUrls.push(absoluteUrl);
+                  console.log(`Found Number 1 Auto Group vehicle: ${absoluteUrl}`);
+                }
+              } catch (e) {
+                console.log(`Invalid vehicle URL: ${href}`);
+              }
+            }
+          }
+        });
+        
+        console.log(`Found ${vehicleListingUrls.length} Number 1 Auto Group vehicle listings`);
+      } catch (error) {
+        console.error(`Error handling Number 1 Auto Group inventory: ${error}`);
+      }
+    } 
+    // Special case for Super Bee Auto - they have a specific inventory page structure
+    else if (isSuperBeeAuto) {
+      console.log(`Handling Super Bee Auto website...`);
+      
+      // For Super Bee Auto, we know they use the URL pattern "/cars-for-sale" 
+      inventoryPageUrl = `${dealershipUrl}/cars-for-sale`;
+      console.log(`Using Super Bee Auto inventory URL: ${inventoryPageUrl}`);
+      
+      try {
+        console.log(`Fetching Super Bee Auto inventory page...`);
+        const inventoryResponse = await fetch(inventoryPageUrl);
+        const inventoryHtml = await inventoryResponse.text();
+        const $inventory = cheerio.load(inventoryHtml);
+        
+        // Search for vehicle elements on the page
+        // We know Super Bee Auto uses a specific HTML structure
+        const vehicleElements = $inventory('.data-vehicle-item');
+        console.log(`Found ${vehicleElements.length} vehicle elements on first page`);
+        
+        if (vehicleElements.length > 0) {
+          // Process the first page vehicles
+          vehicleElements.each((_, element) => {
+            const detailLink = $inventory(element).find('a.data-vehicle-link');
+            if (detailLink.length > 0) {
+              const href = $inventory(detailLink[0]).attr('href');
+              if (href) {
+                try {
+                  const absoluteUrl = new URL(href, dealershipUrl).toString();
+                  if (!vehicleListingUrls.includes(absoluteUrl)) {
+                    vehicleListingUrls.push(absoluteUrl);
+                    console.log(`Found Super Bee Auto vehicle: ${absoluteUrl}`);
+                  }
+                } catch (e) {
+                  console.log(`Invalid Super Bee Auto vehicle URL: ${href}`);
+                }
+              }
+            }
+          });
+          
+          // Look for pagination information to access additional pages
+          // Super Bee Auto shows total inventory count in a hidden input
+          const totalRecordsElement = $inventory('.data-inventory-total-records');
+          if (totalRecordsElement.length > 0) {
+            const totalRecordsValue = totalRecordsElement.val() as string;
+            if (totalRecordsValue) {
+              const totalRecords = parseInt(totalRecordsValue, 10);
+              const vehiclesPerPage = 15; // Super Bee Auto shows 15 vehicles per page
+              
+              console.log(`Super Bee Auto has ${totalRecords} total vehicles`);
+              const totalPages = Math.ceil(totalRecords / vehiclesPerPage);
+              console.log(`Need to process ${totalPages} total pages`);
+              
+              // Process additional pages (page 2+)
+              for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
+                console.log(`Processing Super Bee Auto page ${pageNum} of ${totalPages}`);
+                
+                // Create the URL for the next page
+                const pageUrl = `${inventoryPageUrl}?page=${pageNum}`;
+                
+                try {
+                  const pageResponse = await fetch(pageUrl);
+                  const pageHtml = await pageResponse.text();
+                  const $page = cheerio.load(pageHtml);
+                  
+                  // Find vehicles on this page
+                  const pageVehicleElements = $page('.data-vehicle-item');
+                  console.log(`Found ${pageVehicleElements.length} vehicles on page ${pageNum}`);
+                  
+                  pageVehicleElements.each((_, element) => {
+                    const detailLink = $page(element).find('a.data-vehicle-link');
+                    if (detailLink.length > 0) {
+                      const href = $page(detailLink[0]).attr('href');
+                      if (href) {
+                        try {
+                          const absoluteUrl = new URL(href, dealershipUrl).toString();
+                          if (!vehicleListingUrls.includes(absoluteUrl)) {
+                            vehicleListingUrls.push(absoluteUrl);
+                            console.log(`Found Super Bee Auto vehicle from page ${pageNum}: ${absoluteUrl}`);
+                          }
+                        } catch (e) {
+                          console.log(`Invalid Super Bee Auto vehicle URL from page ${pageNum}: ${href}`);
+                        }
+                      }
+                    }
+                  });
+                } catch (error) {
+                  console.error(`Error fetching Super Bee Auto page ${pageNum}: ${error}`);
+                }
+              }
+            }
+          }
+          
+          console.log(`Found total of ${vehicleListingUrls.length} Super Bee Auto vehicles after pagination`);
+        } else {
+          console.log(`Could not find vehicle elements using selector '.data-vehicle-item', trying alternative selectors...`);
+          
+          // Try alternative selectors for Super Bee Auto vehicles
+          const alternativeSelectors = [
+            '.inventory-item', '.vehicle-item', '.data-inventory-item',
+            '.vehicle-card', '.inventory-vehicle', '.car-listing-details',
+            '.car-container', '.vehicle-container'
+          ];
+          
+          for (const selector of alternativeSelectors) {
+            const items = $inventory(selector);
+            console.log(`Checking alternative selector ${selector}: found ${items.length} elements`);
+            
+            if (items.length > 0) {
+              items.each((_, item) => {
+                // Find the link to the vehicle detail page
+                const links = $inventory(item).find('a');
+                links.each((_, link) => {
+                  const href = $inventory(link).attr('href');
+                  if (href && (
+                    href.includes('/inventory/') || 
+                    href.includes('/vehicle/') || 
+                    href.includes('/detail/') || 
+                    href.includes('/car/')
+                  )) {
+                    try {
+                      const absoluteUrl = new URL(href, dealershipUrl).toString();
+                      if (!vehicleListingUrls.includes(absoluteUrl)) {
+                        vehicleListingUrls.push(absoluteUrl);
+                        console.log(`Found Super Bee Auto vehicle with alternative selector: ${absoluteUrl}`);
+                      }
+                    } catch (e) {
+                      console.log(`Invalid Super Bee Auto vehicle URL: ${href}`);
+                    }
+                  }
+                });
+              });
+              
+              // If we found vehicles with this selector, no need to try others
+              if (vehicleListingUrls.length > 0) {
+                console.log(`Found ${vehicleListingUrls.length} vehicles with selector ${selector}`);
+                break;
+              }
+            }
+          }
+          
+          // As a last resort, grab all links that look like vehicle detail pages
+          if (vehicleListingUrls.length === 0) {
+            console.log(`Still no vehicles found, looking at all links...`);
+            
+            $inventory('a').each((_, link) => {
+              const href = $inventory(link).attr('href');
+              if (href && (
+                href.includes('/inventory/') || 
+                href.includes('/vehicle/') || 
+                href.includes('/detail/') || 
+                href.includes('/car/') ||
+                href.match(/\/cars\/.+\/[a-zA-Z0-9-]+$/)
+              )) {
+                try {
+                  const absoluteUrl = new URL(href, dealershipUrl).toString();
+                  if (!vehicleListingUrls.includes(absoluteUrl)) {
+                    vehicleListingUrls.push(absoluteUrl);
+                    console.log(`Found potential Super Bee Auto vehicle through general link: ${absoluteUrl}`);
+                  }
+                } catch (e) {
+                  console.log(`Invalid Super Bee Auto vehicle URL: ${href}`);
+                }
+              }
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`Error handling Super Bee Auto inventory: ${error}`);
+      }
+    }
+    // Special case for Chantilly Auto Sales
+    else if (isChantillyAuto) {
+      console.log(`Handling Chantilly Auto Sales website...`);
+      
+      // Determine the inventory page URL - usually it's either 'inventory' or 'cars-for-sale'
+      const possiblePaths = ['/inventory', '/cars-for-sale', '/used-cars', '/for-sale', '/vehicles'];
+      let foundInventoryPath = false;
+      
+      // Try each possible path to see which one exists
+      for (const path of possiblePaths) {
+        try {
+          const testUrl = new URL(path, dealershipUrl).toString();
+          console.log(`Testing Chantilly Auto Sales path: ${testUrl}`);
+          
+          const testResponse = await fetch(testUrl, { 
+            headers,
+            redirect: 'follow' 
+          });
+          
+          if (testResponse.ok) {
+            inventoryPageUrl = testUrl;
+            foundInventoryPath = true;
+            console.log(`Found working Chantilly Auto Sales inventory URL: ${inventoryPageUrl}`);
+            break;
+          }
+        } catch (error) {
+          console.log(`Error testing path ${path}: ${error}`);
+        }
+      }
+      
+      // If no specific inventory path worked, use the main URL
+      if (!foundInventoryPath) {
+        inventoryPageUrl = dealershipUrl;
+        console.log(`Using main URL for Chantilly Auto Sales: ${inventoryPageUrl}`);
+      }
+      
+      try {
+        console.log(`Fetching Chantilly Auto Sales inventory page...`);
+        const inventoryResponse = await fetch(inventoryPageUrl, { 
+          headers,
+          redirect: 'follow'
+        });
+        
+        if (!inventoryResponse.ok) {
+          throw new Error(`Failed to fetch Chantilly Auto Sales inventory: ${inventoryResponse.statusText}`);
+        }
+        
+        const inventoryHtml = await inventoryResponse.text();
+        const $inventory = cheerio.load(inventoryHtml);
+        
+        // Try multiple common inventory item selectors
+        const selectors = [
+          '.vehicle', '.car', '.listing', '.inventory-item', '.vehicle-item',
+          '.vehicle-listing', '.car-listing', '.inventory-listing',
+          '.vehicle-card', '.car-card', '.inventory-card',
+          '[data-vehicle]', '[data-listing]', '[data-inventory]',
+          '.carbox', '.autobox', '.car-container', '.vehicle-container'
+        ];
+        
+        let foundVehicles = false;
+        
+        for (const selector of selectors) {
+          const items = $inventory(selector);
+          console.log(`Chantilly Auto Sales: Checking selector ${selector} - found ${items.length} items`);
+          
+          if (items.length > 0) {
+            foundVehicles = true;
+            
+            items.each((_, item) => {
+              // Try to find vehicle detail links
+              const links = $inventory(item).find('a');
+              
+              links.each((_, link) => {
+                const href = $inventory(link).attr('href');
+                if (!href) return;
+                
+                // Check if this looks like a vehicle detail link
+                if (href.includes('/vehicle/') || 
+                    href.includes('/inventory/') || 
+                    href.includes('/car/') || 
+                    href.includes('/detail/') || 
+                    href.includes('/listings/') ||
+                    href.match(/\/[0-9]{4}-[a-z0-9-]+$/i)) { // Matches year-make-model pattern
+                  
+                  try {
+                    const absoluteUrl = new URL(href, dealershipUrl).toString();
+                    if (!vehicleListingUrls.includes(absoluteUrl)) {
+                      vehicleListingUrls.push(absoluteUrl);
+                      console.log(`Found Chantilly Auto Sales vehicle: ${absoluteUrl}`);
+                    }
+                  } catch (e) {
+                    console.log(`Invalid Chantilly Auto Sales vehicle URL: ${href}`);
+                  }
+                }
+              });
+            });
+            
+            if (vehicleListingUrls.length > 0) {
+              console.log(`Found ${vehicleListingUrls.length} Chantilly Auto Sales vehicles with selector ${selector}`);
+              break;
+            }
+          }
+        }
+        
+        // If no vehicles found using common selectors, try a more general approach
+        if (!foundVehicles || vehicleListingUrls.length === 0) {
+          console.log(`No Chantilly Auto Sales vehicles found with common selectors, trying all links...`);
+          
+          $inventory('a').each((_, link) => {
+            const href = $inventory(link).attr('href');
+            const linkText = $inventory(link).text().toLowerCase();
+            
+            if (!href) return;
+            
+            // Check if this is likely a vehicle detail link
+            const isVehicleDetailLink = 
+              href.includes('/vehicle/') || 
+              href.includes('/inventory/') || 
+              href.includes('/car/') || 
+              href.includes('/detail/') || 
+              href.includes('/listings/') ||
+              href.match(/\/[0-9]{4}-[a-z0-9-]+$/i) || // Year-make-model pattern
+              (linkText.includes('details') && href.includes('?')) || // "View details" with query params
+              (linkText.includes('view') && href.includes('?id=')); // "View" with ID
+            
+            if (isVehicleDetailLink) {
+              try {
+                const absoluteUrl = new URL(href, dealershipUrl).toString();
+                if (!vehicleListingUrls.includes(absoluteUrl)) {
+                  vehicleListingUrls.push(absoluteUrl);
+                  console.log(`Found potential Chantilly Auto Sales vehicle through general link: ${absoluteUrl}`);
+                }
+              } catch (e) {
+                console.log(`Invalid Chantilly Auto Sales vehicle URL: ${href}`);
+              }
+            }
+          });
+        }
+        
+        console.log(`Found total of ${vehicleListingUrls.length} Chantilly Auto Sales vehicles`);
+      } catch (error) {
+        console.error(`Error handling Chantilly Auto Sales inventory: ${error}`);
+      }
+    }
+    // Special case for Epic Motor - they have a different pagination structure
+    else if (isEpicMotor) {
+      console.log(`Handling Epic Motor website...`);
+      
+      // Epic Motor uses a specific URL pattern for their inventory
+      inventoryPageUrl = dealershipUrl.includes('inventory') ? dealershipUrl : `${dealershipUrl.replace(/\/$/, '')}/inventory`;
+      console.log(`Using Epic Motor inventory URL: ${inventoryPageUrl}`);
+      
+      try {
+        console.log(`Fetching Epic Motor inventory page...`);
+        const inventoryResponse = await fetch(inventoryPageUrl);
+        const inventoryHtml = await inventoryResponse.text();
+        const $inventory = cheerio.load(inventoryHtml);
+        
+        // Look for vehicle cards on the page
+        const vehicleElements = $inventory('.vehicle-card, .inventory-item, .vehicle-item, .car-item, .car-listing');
+        console.log(`Found ${vehicleElements.length} vehicle elements on first page`);
+        
+        // Process the first page vehicles
+        vehicleElements.each((_, element) => {
+          const detailLinks = $inventory(element).find('a');
+          detailLinks.each((_, link) => {
+            const href = $inventory(link).attr('href');
+            if (href && (
+              href.includes('/inventory/') || 
+              href.includes('/vehicle/') || 
+              href.includes('/details/') ||
+              href.includes('/car/')
+            )) {
+              try {
+                const absoluteUrl = new URL(href, dealershipUrl).toString();
+                if (!vehicleListingUrls.includes(absoluteUrl)) {
+                  vehicleListingUrls.push(absoluteUrl);
+                  console.log(`Found Epic Motor vehicle: ${absoluteUrl}`);
+                }
+              } catch (e) {
+                console.log(`Invalid Epic Motor vehicle URL: ${href}`);
+              }
+            }
+          });
+        });
+        
+        if (vehicleElements.length === 0) {
+          // Try to extract all links that might be vehicle detail pages
+          console.log(`No vehicle elements found, checking direct links to inventory items...`);
+          const allLinks = $inventory('a[href*="/inventory/"]');
+          console.log(`Found ${allLinks.length} potential vehicle links`);
+          
+          allLinks.each((_, link) => {
+            const href = $inventory(link).attr('href');
+            if (href && href !== '/inventory/' && href !== '/inventory') {
+              try {
+                const absoluteUrl = new URL(href, dealershipUrl).toString();
+                if (!vehicleListingUrls.includes(absoluteUrl)) {
+                  vehicleListingUrls.push(absoluteUrl);
+                  console.log(`Found Epic Motor vehicle from links: ${absoluteUrl}`);
+                }
+              } catch (e) {
+                console.log(`Invalid Epic Motor vehicle URL from links: ${href}`);
+              }
+            }
+          });
+        }
+        
+        // Look for pagination on inventory page
+        console.log(`Looking for pagination on inventory page...`);
+        const paginationLinks = $inventory('[class*="page"] a, .pagination a, .pager a');
+        console.log(`Found pagination with selector: [class*="page"] a - ${paginationLinks.length} links`);
+        
+        if (paginationLinks.length > 0) {
+          // Extract URLs from pagination links
+          const pageUrls = new Set<string>();
+          
+          paginationLinks.each((_, link) => {
+            const href = $inventory(link).attr('href');
+            if (href && (
+              href.includes('page_no=') || 
+              href.includes('page=') || 
+              href.includes('pgno=')
+            )) {
+              try {
+                const absoluteUrl = new URL(href, dealershipUrl).toString();
+                pageUrls.add(absoluteUrl);
+              } catch (e) {
+                console.log(`Invalid pagination URL: ${href}`);
+              }
+            }
+          });
+          
+          console.log(`Found ${pageUrls.size} unique pagination URLs`);
+          
+          // Process each pagination URL
+          for (const pageUrl of Array.from(pageUrls)) {
+            console.log(`Processing Epic Motor pagination URL: ${pageUrl}`);
+            
+            try {
+              const pageResponse = await fetch(pageUrl);
+              const pageHtml = await pageResponse.text();
+              const $page = cheerio.load(pageHtml);
+              
+              // Find vehicles on this page
+              const pageVehicleElements = $page('.vehicle-card, .inventory-item, .vehicle-item, .car-item, .car-listing');
+              console.log(`Found ${pageVehicleElements.length} vehicles on page: ${pageUrl}`);
+              
+              if (pageVehicleElements.length > 0) {
+                pageVehicleElements.each((_, element) => {
+                  const detailLinks = $page(element).find('a');
+                  detailLinks.each((_, link) => {
+                    const href = $page(link).attr('href');
+                    if (href && (
+                      href.includes('/inventory/') || 
+                      href.includes('/vehicle/') || 
+                      href.includes('/details/') ||
+                      href.includes('/car/')
+                    )) {
+                      try {
+                        const absoluteUrl = new URL(href, dealershipUrl).toString();
+                        if (!vehicleListingUrls.includes(absoluteUrl)) {
+                          vehicleListingUrls.push(absoluteUrl);
+                          console.log(`Found Epic Motor vehicle from pagination: ${absoluteUrl}`);
+                        }
+                      } catch (e) {
+                        console.log(`Invalid Epic Motor vehicle URL from pagination: ${href}`);
+                      }
+                    }
+                  });
+                });
+              } else {
+                // Try to extract all links that might be vehicle detail pages
+                const allLinks = $page('a[href*="/inventory/"]');
+                
+                allLinks.each((_, link) => {
+                  const href = $page(link).attr('href');
+                  if (href && href !== '/inventory/' && href !== '/inventory') {
+                    try {
+                      const absoluteUrl = new URL(href, dealershipUrl).toString();
+                      if (!vehicleListingUrls.includes(absoluteUrl)) {
+                        vehicleListingUrls.push(absoluteUrl);
+                        console.log(`Found Epic Motor vehicle from pagination links: ${absoluteUrl}`);
+                      }
+                    } catch (e) {
+                      console.log(`Invalid Epic Motor vehicle URL from pagination links: ${href}`);
+                    }
+                  }
+                });
+              }
+            } catch (error) {
+              console.error(`Error fetching Epic Motor pagination URL ${pageUrl}: ${error}`);
+            }
+          }
+        }
+        
+        console.log(`Found total of ${vehicleListingUrls.length} Epic Motor vehicles after pagination`);
+      } catch (error) {
+        console.error(`Error handling Epic Motor inventory: ${error}`);
+      }
+    }
+    // If we didn't find an inventory page, use the dealership URL
+    else if (!inventoryPageUrl) {
+      inventoryPageUrl = dealershipUrl;
+      console.log(`No inventory page found, using dealership URL: ${inventoryPageUrl}`);
+    }
+    
+    // Special handling for Auto Galleria
+    if (isAutoGalleria) {
+      console.log(`Handling Auto Galleria website with special scrapers...`);
+      
+      // Auto Galleria uses a specific URL pattern for their inventory
+      if (!inventoryPageUrl) {
+        inventoryPageUrl = dealershipUrl.includes('/inventory') ? dealershipUrl : `${dealershipUrl.replace(/\/$/, '')}/inventory`;
+      }
+      console.log(`Using Auto Galleria inventory URL: ${inventoryPageUrl}`);
+      
+      try {
+        const inventoryResponse = await fetch(inventoryPageUrl);
+        const inventoryHtml = await inventoryResponse.text();
+        const $inventory = cheerio.load(inventoryHtml);
+        
+        // Auto Galleria uses a consistent structure with vehicle-item elements
+        const vehicleItems = $inventory('.vehicle-item, .vehicle-card, .vdp-vehicle-card, .listing-item');
+        console.log(`Found ${vehicleItems.length} Auto Galleria vehicle cards on first page`);
+        
+        vehicleItems.each((_, item) => {
+          const links = $inventory(item).find('a');
+          links.each((_, link) => {
+            const href = $inventory(link).attr('href');
+            if (href && (
+              href.includes('/vdp/') || 
+              href.includes('Used-') || 
+              href.includes('for-sale-in-')
+            )) {
+              try {
+                const absoluteUrl = new URL(href, inventoryPageUrl).toString();
+                if (!vehicleListingUrls.includes(absoluteUrl)) {
+                  vehicleListingUrls.push(absoluteUrl);
+                  console.log(`Found Auto Galleria vehicle: ${absoluteUrl}`);
+                }
+              } catch (e) {
+                console.error(`Invalid Auto Galleria URL: ${href}`, e);
+              }
+            }
+          });
+        });
+        
+        // Auto Galleria specific pagination handling
+        console.log('Looking for Auto Galleria pagination...');
+        const paginationLinks = $inventory('.pagination a, .page-item a, a[href*="page="], a[href*="page_no="]');
+        const paginationUrls = new Set<string>();
+        
+        paginationLinks.each((_, link) => {
+          const href = $inventory(link).attr('href');
+          if (href && (href.includes('page=') || href.includes('page_no='))) {
+            try {
+              const absoluteUrl = new URL(href, inventoryPageUrl).toString();
+              const pageUrl = new URL(href, inventoryPageUrl).toString();
+              if (!paginationUrls.has(pageUrl) && !pageUrl.includes('page=1') && !pageUrl.includes('page_no=1')) {
+                paginationUrls.add(pageUrl);
+                console.log(`Found Auto Galleria pagination: ${pageUrl}`);
+              }
+            } catch (e) {
+              console.error(`Invalid Auto Galleria pagination URL: ${href}`, e);
+            }
+          }
+        });
+        
+        // Process pagination pages
+        for (const pageUrl of Array.from(paginationUrls)) {
+          try {
+            console.log(`Fetching Auto Galleria pagination page: ${pageUrl}`);
+            const pageResponse = await fetch(pageUrl);
+            const pageHtml = await pageResponse.text();
+            const $page = cheerio.load(pageHtml);
+            
+            const pageVehicleItems = $page('.vehicle-item, .vehicle-card, .vdp-vehicle-card, .listing-item');
+            console.log(`Found ${pageVehicleItems.length} Auto Galleria vehicles on pagination page`);
+            
+            pageVehicleItems.each((_, item) => {
+              const links = $page(item).find('a');
+              links.each((_, link) => {
+                const href = $page(link).attr('href');
+                if (href && (
+                  href.includes('/vdp/') || 
+                  href.includes('Used-') || 
+                  href.includes('for-sale-in-')
+                )) {
+                  try {
+                    const absoluteUrl = new URL(href, pageUrl).toString();
+                    if (!vehicleListingUrls.includes(absoluteUrl)) {
+                      vehicleListingUrls.push(absoluteUrl);
+                      console.log(`Found Auto Galleria vehicle from pagination: ${absoluteUrl}`);
+                    }
+                  } catch (e) {
+                    console.error(`Invalid Auto Galleria URL from pagination: ${href}`, e);
+                  }
+                }
+              });
+            });
+          } catch (error) {
+            console.error(`Error fetching Auto Galleria pagination page ${pageUrl}: ${error}`);
+          }
+        }
+        
+        console.log(`Found total of ${vehicleListingUrls.length} Auto Galleria vehicles`);
+      } catch (error) {
+        console.error(`Error handling Auto Galleria inventory: ${error}`);
+      }
+    }
+    
+    // Look for vehicle listings on the main dealership page
+    const vehicleSelectors = [
+      // Special case for Number 1 Auto Group - needs to be first to priority
+      isNumber1AutoGroup ? 'a[aria-label*="Used-"][href*="/vdp/"]' : null,  // This is the main selector that should work
+      isNumber1AutoGroup ? 'a[aria-label*="New-"][href*="/vdp/"]' : null,
+      isNumber1AutoGroup ? 'a[href*="/vdp/"]' : null,
+      isNumber1AutoGroup ? '.i08r-invBox a[href*="/vdp/"]' : null,
+      isNumber1AutoGroup ? '.i08r-invBox a' : null,
+      isNumber1AutoGroup ? '.i08r_vehicleTitleGrid a' : null,
+      isNumber1AutoGroup ? '.i08r_vehicleTitle a' : null,
+      isNumber1AutoGroup ? '.i08r_image a' : null,
+      isNumber1AutoGroup ? 'h4.i08r_vehicleTitleGrid a' : null,
+      isNumber1AutoGroup ? '.vehicle-title a' : null,
+      isNumber1AutoGroup ? '.vehicle-card a' : null,
+      isNumber1AutoGroup ? '.vehicle-container a' : null,
+      isNumber1AutoGroup ? '.vehicle a' : null,
+      isNumber1AutoGroup ? 'a[aria-label*="Used-"]' : null,
+      isNumber1AutoGroup ? 'a[aria-label*="New-"]' : null,
+      
+      // Special case for Auto Galleria
+      isAutoGalleria ? 'a[href*="/vdp/"]' : null,
+      isAutoGalleria ? '.card a[href*="Used-"]' : null,
+      isAutoGalleria ? '.inventory-card a' : null,
+      isAutoGalleria ? '.vehicle-item a' : null,
+      isAutoGalleria ? '.vehicle-card a' : null,
+      
+      // Common selectors for vehicle listings
+      'a[href*="/inventory/"]', 
+      'a[href*="/vehicles/"]',
+      'a[href*="/vehicle/"]',
+      'a[href*="/used/"]',
+      'a[href*="/new/"]',
+      'a[href*="/cars/"]',
+      'a[href*="/details/"]',
+      'a[href*="/vdp/"]',
+      
+      // More generic selectors
+      '.vehicle-card a',
+      '.vehicle a',
+      '.car-card a',
+      '.listing a',
+      '.inventory-item a',
+      
+      // Special case for Nova Autoland
+      isNovaAutoland ? '.inventory-container a' : null,
+      isNovaAutoland ? '.inventory-item a' : null,
+      isNovaAutoland ? '.inventory a' : null,
+      isNovaAutoland ? '.car-container a' : null
+    ].filter(Boolean);
+    
+    for (const selector of vehicleSelectors) {
+      if (!selector) continue;
+      
+      $(selector).each((_, element) => {
+        const href = $(element).attr('href');
+        if (href && (
+          href.includes('/inventory/') || 
+          href.includes('/vehicles/') || 
+          href.includes('/vehicle/') || 
+          href.includes('/used/') || 
+          href.includes('/new/') ||
+          href.includes('/cars/') ||
+          href.includes('/details/') ||
+          href.includes('/vdp/') ||
+          // VIN in URL pattern
+          href.match(/\/[a-z0-9-]+-[a-z]{3}\d{5,}$/i) || 
+          // Numeric ID pattern
+          href.match(/\/(car|auto|vehicle)\/\d+/) ||
+          // Number 1 Auto Group patterns
+          (isNumber1AutoGroup && (
+            href.match(/\/vdp\/\d+\//) ||
+            href.match(/Used-\d{4}-[A-Za-z-]+-/) ||
+            href.includes('for-sale-in-')
+          ))
+        )) {
+          try {
+            const absoluteUrl = new URL(href, dealershipUrl).toString();
+            if (!vehicleListingUrls.includes(absoluteUrl)) {
+              vehicleListingUrls.push(absoluteUrl);
+            }
+          } catch (e) {
+            console.log(`Invalid vehicle URL: ${href}`);
+          }
+        }
+      });
+      
+      // If we found some vehicle links, no need to try other selectors
+      if (vehicleListingUrls.length > 0) {
+        console.log(`Found ${vehicleListingUrls.length} vehicle listings with selector: ${selector}`);
+        break;
+      }
+    }
+    
+    console.log(`Found ${vehicleListingUrls.length} potential vehicle listings`);
+    
+    // Check for pagination links - we need to find additional pages
+    if (inventoryPageUrl) {
+      try {
+        console.log(`Looking for pagination on inventory page...`);
+        // Use the inventory page HTML we already fetched
+        const inventoryResponse = await fetch(inventoryPageUrl);
+        const inventoryHtml = await inventoryResponse.text();
+        const $inventory = cheerio.load(inventoryHtml);
+        
+        // Special case for Nova Autoland - they use buttons with onClick instead of anchor tags
+        if (isNovaAutoland) {
+          console.log('Detected Nova Autoland site, looking for pagination buttons...');
+          
+          // Extract total number of pages from the pager summary text
+          const pagerSummary = $inventory('.pager-summary').text().trim();
+          const pageMatch = pagerSummary.match(/Page: \d+ of (\d+)/);
+          
+          if (pageMatch && pageMatch[1]) {
+            const totalPages = parseInt(pageMatch[1], 10);
+            console.log(`Nova Autoland pagination detected with ${totalPages} total pages`);
+            
+            // Generate URLs for all pages
+            for (let page = 2; page <= totalPages; page++) {
+              // Nova Autoland uses a specific URL pattern for pagination
+              const pageUrl = `${inventoryPageUrl}${inventoryPageUrl.includes('?') ? '&' : '?'}page=${page}`;
+              
+              try {
+                console.log(`Fetching Nova Autoland pagination page: ${pageUrl}`);
+                const pageResponse = await fetch(pageUrl);
+                const pageHtml = await pageResponse.text();
+                const $page = cheerio.load(pageHtml);
+                
+                // Find vehicle links on this page
+                $page('a').each((_, el) => {
+                  const pageHref = $page(el).attr('href');
+                  if (pageHref && (
+                    pageHref.includes('/inventory/') || 
+                    pageHref.includes('/vehicles/') || 
+                    pageHref.includes('/vehicle/') || 
+                    pageHref.includes('/details/') ||
+                    pageHref.includes('/vdp/')
+                  )) {
+                    try {
+                      const absoluteUrl = new URL(pageHref, pageUrl).toString();
+                      if (!vehicleListingUrls.includes(absoluteUrl)) {
+                        console.log(`Found vehicle from Nova pagination: ${absoluteUrl}`);
+                        vehicleListingUrls.push(absoluteUrl);
+                      }
+                    } catch (e) {
+                      console.log(`Invalid vehicle URL: ${pageHref}`);
+                    }
+                  }
+                });
+              } catch (pageError) {
+                console.error(`Error fetching Nova Autoland page ${page}: ${pageError}`);
+              }
+            }
+            
+            // Skip the standard pagination detection since we've handled it specifically
+            console.log('Used Nova Autoland specific pagination handling');
+          } else {
+            console.log('Could not find Nova Autoland pagination information, falling back to standard detection');
+          }
+        }
+        
+        // Define pagination selectors for standard sites
+        const paginationSelectors = [
+          '.pagination a', 
+          '[class*="page"] a', 
+          '[class*="paging"] a',
+          'a[href*="page="]',
+          'a[href*="p="]',
+          'a.page-link',
+          'a[data-page]',
+          '.pager a',
+          '.paginator a',
+          // Add more broad selectors to catch paginations
+          'li.page-item a',
+          'ul.pagination li a',
+          '*[class*="pagination"] a',
+          // Number 1 Auto Group specific pagination selectors
+          '.i08r_pager a',
+          '.i08r_pagerWrap a',
+          '.i08r-pager a',
+          '.i08r_sortCount a',
+          'a[href*="pagenum="]',
+          'a[onclick*="page"]'
+        ];
+        
+        const pageUrls = new Set<string>();
+        
+        for (const selector of paginationSelectors) {
+          const paginationLinks = $inventory(selector);
+          if (paginationLinks.length > 0) {
+            console.log(`Found pagination with selector: ${selector} - ${paginationLinks.length} links`);
+            
+            paginationLinks.each((_, element) => {
+              const href = $inventory(element).attr('href');
+              const text = $inventory(element).text().trim();
+              
+              // Recognize pagination links by href pattern or numeric text (page numbers)
+              if (href && (
+                href.includes('page=') || 
+                href.includes('p=') ||
+                href.includes('pagenum=') ||
+                href.match(/\/page\/\d+/) ||
+                href.match(/\/p\/\d+/) ||
+                (isNumber1AutoGroup && href.match(/\/newandusedcars\?/)) || // Number 1 Auto Group special case
+                /^\d+$/.test(text) || // If the link text is just a number
+                (isNumber1AutoGroup && /^page \d+$/i.test(text)) // Number 1 Auto Group page links
+              )) {
+                try {
+                  // Ensure href and inventoryPageUrl are not null before constructing URL
+                  const baseUrl = inventoryPageUrl || dealershipUrl;
+                  
+                  const pageUrl = new URL(href, baseUrl).toString();
+                  
+                  // Skip "page 1" or already processed pages or undefined urls
+                  if (pageUrl && pageUrl !== inventoryPageUrl && 
+                      !pageUrls.has(pageUrl) &&
+                      !pageUrl.includes('page=1&') && 
+                      !pageUrl.includes('&page=1') && 
+                      !pageUrl.includes('?page=1') &&
+                      !pageUrl.includes('p=1&') && 
+                      !pageUrl.includes('&p=1') && 
+                      !pageUrl.includes('?p=1') && 
+                      !pageUrl.endsWith('/page/1') && 
+                      !pageUrl.endsWith('/p/1')) {
+                    
+                    pageUrls.add(pageUrl);
+                    console.log(`Found pagination URL: ${pageUrl}`);
+                  }
+                } catch (urlError) {
+                  console.log(`Invalid pagination URL: ${href}`);
+                }
+              }
+            });
+            
+            // Process all the found pagination URLs
+            if (pageUrls.size > 0) {
+              console.log(`Processing ${pageUrls.size} pagination pages`);
+              
+              // Process each pagination page sequentially to avoid overwhelming the server
+              for (const pageUrl of Array.from(pageUrls)) {
+                try {
+                  console.log(`Fetching pagination page: ${pageUrl}`);
+                  const pageResponse = await fetch(pageUrl);
+                  const pageHtml = await pageResponse.text();
+                  const $page = cheerio.load(pageHtml);
+                  
+                  // Look for vehicle links on this pagination page
+                  $page('a').each((_, el) => {
+                    const pageHref = $page(el).attr('href');
+                    if (pageHref && (
+                      pageHref.includes('/inventory/') || 
+                      pageHref.includes('/vehicles/') || 
+                      pageHref.includes('/vehicle/') || 
+                      pageHref.includes('/used/') || 
+                      pageHref.includes('/new/') ||
+                      pageHref.includes('/cars/') ||
+                      pageHref.includes('/details/') ||
+                      pageHref.includes('/vdp/') ||
+                      pageHref.match(/\/[a-z0-9-]+-[a-z]{3}\d{5,}$/i) || 
+                      pageHref.match(/\/(car|auto|vehicle)\/\d+/) ||
+                      // Number 1 Auto Group specific patterns
+                      pageHref.match(/\/vdp\/\d+\//) ||
+                      pageHref.match(/Used-\d{4}-[A-Za-z-]+-/) ||
+                      pageHref.includes('for-sale-in-')
+                    )) {
+                      try {
+                        // Ensure we have a valid pageUrl
+                        const pageUrlString = pageUrl ? pageUrl : dealershipUrl;
+                        
+                        const absoluteUrl = new URL(pageHref, pageUrlString).toString();
+                        if (!vehicleListingUrls.includes(absoluteUrl)) {
+                          console.log(`Found vehicle from pagination: ${absoluteUrl}`);
+                          vehicleListingUrls.push(absoluteUrl);
+                        }
+                      } catch (e) {
+                        console.log(`Invalid vehicle URL: ${pageHref}`);
+                      }
+                    }
+                  });
+                } catch (error) {
+                  console.error(`Error fetching pagination page: ${error}`);
+                }
+              }
+              
+              // We processed pagination links, no need to try other selectors
+              break;
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`Error checking for pagination: ${error}`);
+      }
+    }
+    
+    console.log(`Total of ${vehicleListingUrls.length} vehicle listings found after pagination check`);
+    
+    // Process all the found vehicle listings (up to 100)
+    const vehicleListingsToProcess = vehicleListingUrls.slice(0, 100);
+    console.log(`Processing ${vehicleListingsToProcess.length} vehicle listings...`);
+    
+    const vehicles: InsertVehicle[] = [];
+    
+    for (const url of vehicleListingsToProcess) {
+      try {
+        console.log(`Scraping vehicle listing: ${url}`);
+        const vehicle = await scrapeVehicleListing(url, dealershipId, dealershipName);
+        if (vehicle) {
+          vehicles.push(vehicle);
+          console.log(`Successfully scraped vehicle: ${vehicle.make} ${vehicle.model} (${vehicle.year})`);
+        }
+      } catch (error) {
+        console.error(`Error processing vehicle listing: ${error}`);
+      }
+    }
+    
+    console.log(`Finished scraping ${vehicles.length} vehicles for dealership ${dealershipName}`);
+    return vehicles;
+  } catch (error) {
+    console.error(`Error scraping dealership ${dealershipName}:`, error);
+    return [];
+  }
+}
+
+async function scrapeVehicleListing(url: string, dealershipId: number, dealershipName: string): Promise<InsertVehicle | null> {
+  // Determine dealership type for custom handling
+  const isNovaAutoland = url.includes('novaautoland') || dealershipName.toLowerCase().includes('nova');
+  // Define isSuperBeeAuto once
+  const isSuperBeeAuto = url.includes('superbeeauto') || dealershipName.toLowerCase().includes('super bee');
+  const isNumber1AutoGroup = url.includes('number1auto') || 
+                               dealershipName.toLowerCase().includes('number 1 auto') || 
+                               dealershipName.toLowerCase().includes('number one auto');
+  const isEpicMotor = url.includes('epicmotorcompany') || dealershipName.toLowerCase().includes('epic motor');
+  const isAutoGalleria = url.includes('autogalleriava') || dealershipName.toLowerCase().includes('auto galleria');
+  console.log(`Vehicle scraping for: ${dealershipName} - Nova Autoland: ${isNovaAutoland}, Super Bee Auto: ${isSuperBeeAuto}, Number 1 Auto Group: ${isNumber1AutoGroup}, Epic Motor: ${isEpicMotor}, Auto Galleria: ${isAutoGalleria}`);
+  try {
+    // Set appropriate headers to mimic a real browser, especially needed for Super Bee Auto
+    const headers: HeadersInit = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Referer': 'https://www.google.com/'
+    };
+    
+    // Add additional headers for Super Bee Auto
+    if (isSuperBeeAuto) {
+      console.log("Using enhanced anti-block measures for Super Bee Auto vehicle page");
+      Object.assign(headers, {
+        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1',
+      });
+    }
+    
+    const response = await fetch(url, { 
+      headers,
+      redirect: 'follow'
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch vehicle listing: ${response.statusText}`);
+    }
+    
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    
+    // Extract VIN (must be present)
+    let vin = '';
+    
+    // Method 1: Look for VIN in visible text
+    $('*:contains("VIN")').each((_, element) => {
+      const text = $(element).text();
+      const vinMatch = text.match(/VIN[^\w\d]*([A-HJ-NPR-Z0-9]{17})/i);
+      if (vinMatch && vinMatch[1]) {
+        vin = vinMatch[1];
+      }
+    });
+    
+    // Method 2: Look for VIN in various common attributes
+    if (!vin) {
+      $('[data-vin], [vin], [id*="vin"], [class*="vin"], [itemprop="vehicleIdentificationNumber"]').each((_, element) => {
+        const attrVin = $(element).attr('data-vin') || $(element).attr('vin') || $(element).text().trim();
+        if (attrVin && /^[A-HJ-NPR-Z0-9]{17}$/i.test(attrVin)) {
+          vin = attrVin;
+        }
+      });
+    }
+    
+    // Method 3: Search in meta tags
+    if (!vin) {
+      $('meta').each((_, element) => {
+        const content = $(element).attr('content') || '';
+        const vinMatch = content.match(/([A-HJ-NPR-Z0-9]{17})/i);
+        if (vinMatch && vinMatch[1]) {
+          vin = vinMatch[1];
+        }
+      });
+    }
+    
+    // Method 4: Look for VIN in URL
+    if (!vin) {
+      const urlVinMatch = url.match(/([A-HJ-NPR-Z0-9]{17})/i);
+      if (urlVinMatch && urlVinMatch[1]) {
+        vin = urlVinMatch[1];
+      }
+    }
+    
+    // Method 5: Special case for Number 1 Auto Group - they display VIN differently
+    if (!vin && isNumber1AutoGroup) {
+      $('.i08r_optVIN, [class*="VIN"], [data-id*="vin"], [class*="vin"]').each((_, element) => {
+        const text = $(element).text().trim();
+        const vinMatch = text.match(/([A-HJ-NPR-Z0-9]{17})/i);
+        if (vinMatch && vinMatch[1]) {
+          vin = vinMatch[1];
+          console.log(`Found Number 1 Auto Group VIN: ${vin}`);
+        }
+      });
+      
+      // Try in hidden form fields
+      if (!vin) {
+        $('input[name*="VIN"], input[id*="VIN"], input[name*="vin"], input[id*="vin"]').each((_, element) => {
+          const inputValue = $(element).val();
+          if (typeof inputValue === 'string' && /^[A-HJ-NPR-Z0-9]{17}$/i.test(inputValue)) {
+            vin = inputValue;
+            console.log(`Found Number 1 Auto Group VIN in form field: ${vin}`);
+          }
+        });
+      }
+    }
+    
+    // If no VIN found, we can't proceed
+    if (!vin) {
+      console.log(`No VIN found for vehicle at ${url}, skipping`);
+      return null;
+    }
+    
+    // Extract basic vehicle info
+    let make = '';
+    let model = '';
+    let year = 0;
+    let price = 0;
+    let mileage = 0;
+    let exteriorColor = '';
+    let interiorColor = '';
+    let bodyType = '';
+    let fuelType = '';
+    let transmission = '';
+    let drivetrain = '';
+    let description = '';
+    let imageUrls: string[] = [];
+    let carfaxUrl = '';
+    let contactUrl = '';
+    
+    // We already have the isSuperBeeAuto flag from earlier in the function
+    
+    // Extract title - usually contains year, make, model
+    let title = '';
+    
+    // Enhanced special handling for Auto Galleria title elements
+    if (isAutoGalleria) {
+      console.log('Applying Auto Galleria specific title extraction');
+      
+      // Auto Galleria specific title selectors
+      const autoGalleriaTitleSelectors = [
+        '.veh-details-title', 
+        '.detail-title',
+        '.vehicle-title',
+        '.inventory-title',
+        'h1.title',
+        'h1.page-title',
+        '.vdp-vehicle-title',
+        '.details-title',
+        // More general selectors
+        'h1', 
+        'h2',
+        '.title'
+      ];
+      
+      for (const selector of autoGalleriaTitleSelectors) {
+        $(selector).each((_, element) => {
+          const text = $(element).text().trim();
+          if (text && text.length > 5 && !text.includes('Inventory') && !text.includes('Gallery')) {
+            title = text;
+            console.log(`Found Auto Galleria title using selector ${selector}: ${title}`);
+            return false; // Break the loop after finding a good title
+          }
+        });
+        
+        if (title) break; // If we found a title, stop trying selectors
+      }
+      
+      // Extract title from URL if still not found
+      if (!title) {
+        // Auto Galleria URLs often contain vehicle details
+        const urlParts = url.split('/');
+        const lastPart = urlParts[urlParts.length - 1];
+        
+        if (lastPart.includes('Used-') || lastPart.includes('New-')) {
+          // Format is often: Used-YEAR-MAKE-MODEL-...
+          const titleFromUrl = lastPart
+            .replace(/-/g, ' ')
+            .replace(/Used |New /, '')
+            .replace(/for-sale-in.*$/, '')
+            .trim();
+          
+          if (titleFromUrl && titleFromUrl.length > 5) {
+            title = titleFromUrl;
+            console.log(`Extracted Auto Galleria title from URL: ${title}`);
+          }
+        }
+      }
+      
+      // If still no title, check meta tags
+      if (!title) {
+        $('meta[property="og:title"], meta[name="title"]').each((_, element) => {
+          const content = $(element).attr('content');
+          if (content && content.length > 5) {
+            title = content.trim();
+            console.log(`Found Auto Galleria title from meta tags: ${title}`);
+          }
+        });
+      }
+    }
+    // Enhanced special handling for Super Bee Auto title elements
+    else if (isSuperBeeAuto) {
+      // Try multiple selectors with increasing specificity
+      const superBeeTitleSelectors = [
+        // Very specific selectors for Super Bee Auto
+        'h1.inventory-title',
+        'h1.details-title',
+        'h1.vehicle-details-title',
+        '.vehicle-details h1',
+        '.vehicle-display-title',
+        // More general selectors
+        '.vehicle-title', 
+        '.listing-title', 
+        'h1.title', 
+        '[class*="vehicle-name"]',
+        // Fallback to any heading with vehicle info
+        'h1', 'h2', '.details-title'
+      ];
+      
+      for (const selector of superBeeTitleSelectors) {
+        $(selector).each((_, element) => {
+          const text = $(element).text().trim();
+          if (text && text.length > 5 && !text.includes('Details') && !text.includes('Inventory')) {
+            title = text;
+            console.log(`Found Super Bee Auto title using selector ${selector}: ${title}`);
+            return false; // Break the loop after finding a good title
+          }
+        });
+        
+        if (title) break; // If we found a title, stop trying selectors
+      }
+      
+      // If still no title, try looking for title in the page's meta data or schema.org markup
+      if (!title) {
+        $('meta[property="og:title"], meta[name="title"]').each((_, element) => {
+          const content = $(element).attr('content');
+          if (content && content.length > 5) {
+            title = content.trim();
+            console.log(`Found Super Bee Auto title from meta tags: ${title}`);
+          }
+        });
+      }
+    }
+    
+    // If no title found with Super Bee Auto selectors or not a Super Bee site, use standard selectors
+    if (!title) {
+      const titleElement = $('h1, h2, [class*="title"], [class*="vehicle-title"], [class*="car-title"], [itemprop="name"]').first();
+      title = titleElement.text().trim();
+    }
+    
+    // Parse year, make, model from title or structured data
+    if (title) {
+      // Extract year (4 digit number between 1900 and current year + 1)
+      const currentYear = new Date().getFullYear();
+      const yearMatch = title.match(/\b(19\d{2}|20\d{2})\b/);
+      if (yearMatch && yearMatch[1]) {
+        const parsedYear = parseInt(yearMatch[1], 10);
+        if (parsedYear >= 1900 && parsedYear <= currentYear + 1) {
+          year = parsedYear;
+        }
+      }
+      
+      // Extract make and model (this is more complex and site-specific)
+      const commonMakes = [
+        'acura', 'alfa romeo', 'aston martin', 'audi', 'bentley', 'bmw', 'buick', 'cadillac',
+        'chevrolet', 'chevy', 'chrysler', 'dodge', 'ferrari', 'fiat', 'ford', 'genesis',
+        'gmc', 'honda', 'hyundai', 'infiniti', 'jaguar', 'jeep', 'kia', 'lamborghini',
+        'land rover', 'lexus', 'lincoln', 'lotus', 'maserati', 'mazda', 'mclaren', 'mercedes-benz',
+        'mercedes', 'mercury', 'mini', 'mitsubishi', 'nissan', 'porsche', 'ram',
+        'rolls-royce', 'subaru', 'tesla', 'toyota', 'volkswagen', 'vw', 'volvo'
+      ];
+      
+      for (const brand of commonMakes) {
+        if (title.toLowerCase().includes(brand)) {
+          make = brand;
+          // For abbreviations, capitalize them
+          if (brand === 'bmw' || brand === 'gmc' || brand === 'vw') {
+            make = brand.toUpperCase();
+          } 
+          // For multi-word brands, capitalize each word
+          else if (brand.includes(' ')) {
+            make = brand.split(' ')
+              .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+              .join(' ');
+          }
+          // For single word brands, just capitalize the first letter
+          else {
+            make = brand.charAt(0).toUpperCase() + brand.slice(1);
+          }
+          
+          // Normalize some common name variations
+          if (make === 'Chevy') make = 'Chevrolet';
+          if (make === 'VW') make = 'Volkswagen';
+          
+          // Try to extract model after the make
+          const afterMake = title.toLowerCase().split(brand)[1];
+          if (afterMake) {
+            // Extract the first "word" after the make as the model
+            // This is a simplistic approach and might need refinement
+            const modelMatch = afterMake.match(/^\s*([a-z0-9-]+)/i);
+            if (modelMatch && modelMatch[1]) {
+              model = modelMatch[1].trim();
+              // Capitalize first letter of each word in model
+              model = model.split('-')
+                .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                .join('-');
+            }
+          }
+          
+          break;
+        }
+      }
+    }
+    
+    // Look for structured data for more accurate info
+    $('[itemprop="brand"], [itemprop="manufacturer"]').each((_, element) => {
+      const itemPropMake = $(element).text().trim() || $(element).attr('content');
+      if (itemPropMake) {
+        make = itemPropMake;
+      }
+    });
+    
+    $('[itemprop="model"]').each((_, element) => {
+      const itemPropModel = $(element).text().trim() || $(element).attr('content');
+      if (itemPropModel) {
+        model = itemPropModel;
+      }
+    });
+    
+    $('[itemprop="modelDate"], [itemprop="productionDate"], [itemprop="releaseDate"]').each((_, element) => {
+      const itemPropYear = $(element).text().trim() || $(element).attr('content');
+      if (itemPropYear) {
+        const parsedYear = parseInt(itemPropYear, 10);
+        if (!isNaN(parsedYear) && parsedYear > 1900) {
+          year = parsedYear;
+        }
+      }
+    });
+    
+    // We already have the isSuperBeeAuto flag from earlier in the code
+    
+    // Extract price - with enhanced special handling for Super Bee Auto
+    if (isSuperBeeAuto) {
+      // Super Bee Auto typically has prices in a specific format/location
+      // Try multiple selectors in order of specificity
+      const superBeePriceSelectors = [
+        // Very specific selectors for Super Bee Auto
+        '.vehicle-detail-price',
+        '.vehicle-details-price',
+        '.main-price',
+        '.asking-price',
+        '.sale-price',
+        // More general selectors
+        '.vehicle-price', 
+        '.price-value',
+        '[id*="price"]',
+        '[class*="price"]',
+        // Most generic price selectors
+        'strong:contains("$")',
+        'span:contains("$")',
+        'div:contains("$")'
+      ];
+      
+      let priceFound = false;
+      
+      for (const selector of superBeePriceSelectors) {
+        $(selector).each((_, element) => {
+          if (priceFound) return false;
+          
+          const priceText = $(element).text().trim();
+          if (priceText && priceText.includes('$')) {
+            // Super Bee Auto uses a different price format
+            const priceMatch = priceText.match(/\$\s?(\d{1,3}(,\d{3})*(\.\d+)?)/);
+            if (priceMatch && priceMatch[1]) {
+              const parsedPrice = parseFloat(priceMatch[1].replace(/,/g, ''));
+              if (!isNaN(parsedPrice) && parsedPrice > 0) {
+                price = parsedPrice;
+                console.log(`Found Super Bee Auto price using selector ${selector}: $${price}`);
+                priceFound = true;
+                return false; // Break the loop after finding a valid price
+              }
+            }
+          }
+        });
+        
+        if (priceFound) break; // Stop trying selectors if we found a price
+      }
+      
+      // If no price found with specific selectors, try a broader search
+      if (!priceFound) {
+        // Look for price in any element with $ symbol followed by digits
+        $('*:contains("$")').each((_, element) => {
+          if (priceFound) return false;
+          
+          // Skip elements that are clearly not price indicators
+          const text = $(element).text().trim();
+          const elementHtml = $(element).html() || '';
+          
+          // Skip if element contains child elements with text or is very long
+          if (elementHtml.includes('<') || text.length > 25) return;
+          
+          if (text && text.includes('$')) {
+            const priceMatch = text.match(/\$\s?(\d{1,3}(,\d{3})*(\.\d+)?)/);
+            if (priceMatch && priceMatch[1]) {
+              const parsedPrice = parseFloat(priceMatch[1].replace(/,/g, ''));
+              if (!isNaN(parsedPrice) && parsedPrice > 0 && parsedPrice < 200000) { // Realistic price range
+                price = parsedPrice;
+                console.log(`Found Super Bee Auto price using general search: $${price}`);
+                priceFound = true;
+                return false;
+              }
+            }
+          }
+        });
+      }
+    } else if (isNumber1AutoGroup) {
+      // Number 1 Auto Group specific price extraction
+      let priceFound = false;
+      
+      // Number 1 Auto Group specific price selectors
+      const number1AutoPriceSelectors = [
+        '.i08r_priceWrap',        // Primary price wrapper
+        '.i08r_price',            // Price element
+        '.i08r_priceAlt',         // Alternate price
+        '.i08r_priceInfo',        // Price info container
+        '.i08r_vehiclePrice',     // Vehicle price
+        '.i08r_vehiclePriceWrap', // Vehicle price wrapper
+        '.i08r_priceMoney',       // Price with currency
+        '.lblPrice',              // Label for price
+        '.price',                 // Standard price class
+        '[itemprop="price"]'      // Schema.org price markup
+      ];
+      
+      for (const selector of number1AutoPriceSelectors) {
+        $(selector).each((_, element) => {
+          if (priceFound) return false;
+          
+          const text = $(element).text().trim();
+          
+          if (text && text.includes('$')) {
+            // Number 1 Auto Group price format
+            const priceMatch = text.match(/\$\s?(\d{1,3}(,\d{3})*(\.\d+)?)/);
+            if (priceMatch && priceMatch[1]) {
+              const parsedPrice = parseFloat(priceMatch[1].replace(/,/g, ''));
+              if (!isNaN(parsedPrice) && parsedPrice > 0) {
+                price = parsedPrice;
+                console.log(`Found Number 1 Auto Group price: $${price}`);
+                priceFound = true;
+                return false;
+              }
+            }
+          }
+        });
+        
+        if (priceFound) break;
+      }
+      
+      // Fallback to general price search if no specific price found
+      if (!priceFound) {
+        // Look for $ signs with digits in text
+        $('*:contains("$")').each((_, element) => {
+          if (priceFound) return false;
+          
+          const text = $(element).text().trim();
+          // Skip large text blocks and elements that are clearly not prices
+          if (text.length > 30 || text.includes('msrp') || text.includes('starting at')) return;
+          
+          if (text && text.includes('$')) {
+            const priceMatch = text.match(/\$\s?(\d{1,3}(,\d{3})*(\.\d+)?)/);
+            if (priceMatch && priceMatch[1]) {
+              const parsedPrice = parseFloat(priceMatch[1].replace(/,/g, ''));
+              if (!isNaN(parsedPrice) && parsedPrice > 0 && parsedPrice < 500000) { // Realistic price range
+                price = parsedPrice;
+                console.log(`Found Number 1 Auto Group price via general search: $${price}`);
+                priceFound = true;
+                return false;
+              }
+            }
+          }
+        });
+      }
+    } else {
+      // Standard price extraction for other dealerships
+      $('[itemprop="price"], [class*="price"], .price, [id*="price"]').each((_, element) => {
+        const priceText = $(element).text().trim() || $(element).attr('content');
+        if (priceText) {
+          // Extract only numbers from the price text
+          const priceMatch = priceText.match(/[$€£]?\s?(\d{1,3}(,\d{3})*(\.\d+)?)/);
+          if (priceMatch && priceMatch[1]) {
+            // Remove commas and convert to number
+            const parsedPrice = parseFloat(priceMatch[1].replace(/,/g, ''));
+            if (!isNaN(parsedPrice) && parsedPrice > 0 && (price === 0 || parsedPrice < price)) {
+              price = parsedPrice;
+            }
+          }
+        }
+      });
+    }
+    
+    // Extract mileage with enhanced special handling for Super Bee Auto
+    if (isSuperBeeAuto) {
+      // Super Bee Auto typically displays mileage in specific elements
+      const superBeeMileageSelectors = [
+        // Very specific selectors for Super Bee Auto
+        '.vehicle-detail-mileage',
+        '.vehicle-details-mileage',
+        '.odometer-reading',
+        '.detail-specification:contains("Mileage")',
+        '.detail-item:contains("Mileage")',
+        // More general selectors
+        '.vehicle-mileage', 
+        '.mileage-value',
+        '[class*="mileage"]',
+        '[class*="odometer"]',
+        // Most generic selectors that may contain mileage
+        'strong:contains("miles")',
+        'span:contains("miles")',
+        'div:contains("miles")'
+      ];
+      
+      let mileageFound = false;
+      
+      for (const selector of superBeeMileageSelectors) {
+        $(selector).each((_, element) => {
+          if (mileageFound) return false;
+          
+          const text = $(element).text().trim();
+          
+          // Try two patterns - one with "miles" and one with just numbers
+          const mileageMatch = 
+            text.match(/(\d{1,3}(,\d{3})*)(\.\d+)?\s*(mi|miles|mil)/i) || 
+            text.match(/mileage:?\s*(\d{1,3}(,\d{3})*)/i);
+          
+          if (mileageMatch && mileageMatch[1]) {
+            const parsedMileage = parseInt(mileageMatch[1].replace(/,/g, ''), 10);
+            if (!isNaN(parsedMileage) && parsedMileage > 0 && parsedMileage < 1000000) { // Reasonable mileage range
+              mileage = parsedMileage;
+              console.log(`Found Super Bee Auto mileage using selector ${selector}: ${mileage} miles`);
+              mileageFound = true;
+              return false; // Break each loop after finding valid mileage
+            }
+          }
+        });
+        
+        if (mileageFound) break; // Stop trying selectors if we found mileage
+      }
+      
+      // If no mileage found with specific selectors, try a broader search
+      if (!mileageFound) {
+        // Look for mileage in any element with "miles" or "mileage" text
+        $('*:contains("miles"), *:contains("mileage"), *:contains("odometer")').each((_, element) => {
+          if (mileageFound) return false;
+          
+          // Skip elements that are clearly not mileage indicators
+          const text = $(element).text().trim();
+          const elementHtml = $(element).html() || '';
+          
+          // Skip if element contains child elements with text or is very long
+          if (elementHtml.includes('<') || text.length > 50) return;
+          
+          if (text) {
+            const mileageMatch = text.match(/(\d{1,3}(,\d{3})*)(\.\d+)?\s*(mi|miles|mil)/i);
+            if (mileageMatch && mileageMatch[1]) {
+              const parsedMileage = parseInt(mileageMatch[1].replace(/,/g, ''), 10);
+              if (!isNaN(parsedMileage) && parsedMileage > 0 && parsedMileage < 1000000) {
+                mileage = parsedMileage;
+                console.log(`Found Super Bee Auto mileage using general search: ${mileage} miles`);
+                mileageFound = true;
+                return false;
+              }
+            }
+          }
+        });
+      }
+    } else {
+      // Special handling for Number 1 Auto Group
+      if (isNumber1AutoGroup) {
+        // Try specific selectors first
+        let mileageFound = false;
+        
+        // Number 1 Auto Group specific selectors
+        const number1AutoSelectors = [
+          '.i08r_optMileage',            // Primary mileage class
+          'p.i08r_optMileage',           // P tag with mileage class
+          '.lblMileage',                 // Label for mileage
+          '.i08r_optMileage .lblMileage' // Label in mileage container
+        ];
+        
+        for (const selector of number1AutoSelectors) {
+          $(selector).each((_, element) => {
+            if (mileageFound) return false;
+            
+            const parentText = $(element).parent().text().trim();
+            const text = $(element).text().trim();
+            const fullText = parentText || text;
+            
+            // Typical format: "Mileage: 15,525"
+            const mileageMatch = fullText.match(/Mileage:?\s*(\d{1,3}(,\d{3})*)/i);
+            
+            if (mileageMatch && mileageMatch[1]) {
+              const parsedMileage = parseInt(mileageMatch[1].replace(/,/g, ''), 10);
+              if (!isNaN(parsedMileage) && parsedMileage > 0 && parsedMileage < 1000000) {
+                mileage = parsedMileage;
+                console.log(`Found Number 1 Auto Group mileage: ${mileage} miles`);
+                mileageFound = true;
+                return false;
+              }
+            }
+          });
+          
+          if (mileageFound) break;
+        }
+      }
+      
+      // Standard mileage extraction for other dealerships or as fallback
+      if (mileage === 0) {
+        $('*:contains("miles"), *:contains("mileage"), *:contains("odometer")').each((_, element) => {
+          const text = $(element).text();
+          const mileageMatch = text.match(/(\d{1,3}(,\d{3})*)(\.\d+)?\s*(mi|miles|mil)/i);
+          if (mileageMatch && mileageMatch[1]) {
+            const parsedMileage = parseInt(mileageMatch[1].replace(/,/g, ''), 10);
+            if (!isNaN(parsedMileage) && parsedMileage > 0) {
+              mileage = parsedMileage;
+            }
+          }
+        });
+      }
+    }
+    
+    // Extract exterior color with Number 1 Auto Group handling
+    if (isNumber1AutoGroup) {
+      // Number 1 Auto Group stores exterior color in specific element
+      $('.i08r_optColor').each((_, element) => {
+        const text = $(element).text().trim();
+        // Typical format "Color: Black" or "Exterior Color: Black"
+        const colorMatch = text.match(/Color:?\s*([a-z0-9\s-]+)/i) || 
+                          text.match(/Exterior\s*Color:?\s*([a-z0-9\s-]+)/i);
+        if (colorMatch && colorMatch[1]) {
+          exteriorColor = colorMatch[1].trim();
+          console.log(`Found Number 1 Auto Group exterior color: ${exteriorColor}`);
+        }
+      });
+      
+      // Try to find interior color in a dedicated element
+      $('.i08r_optInterior').each((_, element) => {
+        const text = $(element).text().trim();
+        // Typical format "Interior: Black" or "Interior Color: Black"
+        const colorMatch = text.match(/Interior:?\s*([a-z0-9\s-]+)/i) || 
+                          text.match(/Interior\s*Color:?\s*([a-z0-9\s-]+)/i);
+        if (colorMatch && colorMatch[1]) {
+          interiorColor = colorMatch[1].trim();
+          console.log(`Found Number 1 Auto Group interior color: ${interiorColor}`);
+        }
+      });
+    }
+    
+    // Standard extraction for exterior color if not already found
+    if (!exteriorColor) {
+      $('*:contains("exterior color"), *:contains("ext. color"), *:contains("color:")').each((_, element) => {
+        const text = $(element).text();
+        const colorMatch = text.match(/exterior\s*color:?\s*([a-z\s]+)/i) || 
+                          text.match(/ext\.\s*color:?\s*([a-z\s]+)/i) ||
+                          text.match(/color:?\s*([a-z\s]+)/i);
+        if (colorMatch && colorMatch[1]) {
+          exteriorColor = colorMatch[1].trim();
+        }
+      });
+    }
+    
+    // Standard extraction for interior color if not already found
+    if (!interiorColor) {
+      $('*:contains("interior color"), *:contains("int. color")').each((_, element) => {
+        const text = $(element).text();
+        const colorMatch = text.match(/interior\s*color:?\s*([a-z\s]+)/i) || 
+                          text.match(/int\.\s*color:?\s*([a-z\s]+)/i);
+        if (colorMatch && colorMatch[1]) {
+          interiorColor = colorMatch[1].trim();
+        }
+      });
+    }
+    
+    // Extract body type
+    $('*:contains("body style"), *:contains("body type")').each((_, element) => {
+      const text = $(element).text();
+      const bodyMatch = text.match(/body\s*(style|type):?\s*([a-z\s]+)/i);
+      if (bodyMatch && bodyMatch[2]) {
+        bodyType = bodyMatch[2].trim();
+      }
+    });
+    
+    // Extract fuel type
+    $('*:contains("fuel"), *:contains("gas")').each((_, element) => {
+      const text = $(element).text();
+      const fuelMatch = text.match(/fuel\s*type:?\s*([a-z\s]+)/i) || 
+                        text.match(/fuel:?\s*([a-z\s]+)/i);
+      if (fuelMatch && fuelMatch[1]) {
+        fuelType = fuelMatch[1].trim();
+      }
+    });
+    
+    // Extract transmission
+    $('*:contains("transmission")').each((_, element) => {
+      const text = $(element).text();
+      const transMatch = text.match(/transmission:?\s*([a-z0-9\s-]+)/i);
+      if (transMatch && transMatch[1]) {
+        transmission = transMatch[1].trim();
+      }
+    });
+    
+    // Extract drivetrain
+    $('*:contains("drivetrain"), *:contains("drive type")').each((_, element) => {
+      const text = $(element).text();
+      const driveMatch = text.match(/drivetrain:?\s*([a-z0-9\s-]+)/i) || 
+                         text.match(/drive\s*type:?\s*([a-z0-9\s-]+)/i);
+      if (driveMatch && driveMatch[1]) {
+        drivetrain = driveMatch[1].trim();
+      }
+    });
+    
+    // Extract description
+    const descriptionElement = $('[itemprop="description"], [class*="description"], [id*="description"]').first();
+    if (descriptionElement.length) {
+      description = descriptionElement.text().trim();
+    }
+    
+    // Extract images - prioritize main image
+    // We already have the isNovaAutoland, isNumber1AutoGroup, and isAutoGalleria flags from earlier in the function
+
+    // Special handling for Auto Galleria
+    if (isAutoGalleria) {
+      // Auto Galleria uses specific selectors for vehicle images
+      console.log('Applying Auto Galleria specific image extraction');
+      
+      // Auto Galleria uses slick slider for images
+      const autoGalleriaImageSelectors = [
+        '.slick-slider img',
+        '.slider-image img',
+        '.fancybox-thumb',
+        '.vehicleImg',
+        '.photo-gallery img',
+        '.vehicle-image img',
+        '.vehicle-img',
+        '.main-img',
+        // More general image selectors
+        'img[src*="dealer-cdn"]',
+        'img[src*="dealercarsearch"]',
+        'img[src*="inventory"]',
+        'img[src*="vehicle"]'
+      ];
+      
+      // Try all the selectors
+      for (const selector of autoGalleriaImageSelectors) {
+        if (imageUrls.length > 0) break; // Stop if we already found images
+        
+        $(selector).each((_, element) => {
+          const src = $(element).attr('src');
+          if (src && !src.includes('logo') && !src.includes('button') && !src.includes('icon')) {
+            try {
+              const absoluteUrl = new URL(src, url).toString();
+              if (!imageUrls.includes(absoluteUrl)) {
+                imageUrls.push(absoluteUrl);
+                console.log(`Found Auto Galleria image with selector ${selector}: ${absoluteUrl}`);
+              }
+            } catch (e) {
+              console.log(`Invalid Auto Galleria image URL: ${src}`);
+            }
+          }
+          
+          // Also check data-src attribute which is common for lazy-loaded images
+          const dataSrc = $(element).attr('data-src');
+          if (dataSrc && !dataSrc.includes('logo') && !dataSrc.includes('button') && !dataSrc.includes('icon')) {
+            try {
+              const absoluteUrl = new URL(dataSrc, url).toString();
+              if (!imageUrls.includes(absoluteUrl)) {
+                imageUrls.push(absoluteUrl);
+                console.log(`Found Auto Galleria image with data-src: ${absoluteUrl}`);
+              }
+            } catch (e) {
+              console.log(`Invalid Auto Galleria data-src URL: ${dataSrc}`);
+            }
+          }
+        });
+      }
+      
+      // If no images found, try looking for original photos in hidden links
+      if (imageUrls.length === 0) {
+        $('a[data-fancybox], a.fancybox, a[rel*="gallery"]').each((_, element) => {
+          const href = $(element).attr('href');
+          if (href && (href.includes('.jpg') || href.includes('.jpeg') || href.includes('.png'))) {
+            try {
+              const absoluteUrl = new URL(href, url).toString();
+              if (!imageUrls.includes(absoluteUrl)) {
+                imageUrls.push(absoluteUrl);
+                console.log(`Found Auto Galleria image in gallery link: ${absoluteUrl}`);
+              }
+            } catch (e) {
+              console.log(`Invalid Auto Galleria gallery image URL: ${href}`);
+            }
+          }
+        });
+      }
+      
+      // If still no images, try looking for data-original attributes for lazy loading
+      if (imageUrls.length === 0) {
+        $('img[data-original]').each((_, element) => {
+          const dataOriginal = $(element).attr('data-original');
+          if (dataOriginal && !dataOriginal.includes('logo') && !dataOriginal.includes('button')) {
+            try {
+              const absoluteUrl = new URL(dataOriginal, url).toString();
+              if (!imageUrls.includes(absoluteUrl)) {
+                imageUrls.push(absoluteUrl);
+                console.log(`Found Auto Galleria image with data-original: ${absoluteUrl}`);
+              }
+            } catch (e) {
+              console.log(`Invalid Auto Galleria data-original URL: ${dataOriginal}`);
+            }
+          }
+        });
+      }
+    }
+
+    const imageSelectors = [
+      // Number 1 Auto Group specific selectors
+      ...(isNumber1AutoGroup ? [
+        // Primary Number 1 Auto Group selectors
+        '.i08r_mainImg', 
+        '.i08r_image img',
+        '.i08r-invBox img',
+        'img.lazyload[data-src]',
+        'img[data-src*="dealercarsearch.com"]',
+        '.thumb-item img',
+        '.carousel-item img',
+        '.jic-image img'
+      ] : []),
+      
+      // Nova Autoland specific selectors
+      ...(isNovaAutoland ? [
+        // Primary Nova-specific selectors from our analysis
+        '.elementor-carousel-image',
+        '.elementor-widget-container img',
+        '.slider-large img',
+        'figure img',
+        'a.popup-image img',
+        '[data-elementor-lightbox-slideshow] img',
+        '.e-gallery-item img',
+        '.e-gallery-image',
+        '.gallery-item img',
+        
+        // Original selectors
+        '.fotorama__img',
+        '.fotorama [src]',
+        '.fotorama__active img',
+        '.fotorama__stage img',
+        '.ad-gallery img',
+        '.vehicle-detail-image img',
+        '.inventory-detail-slider img',
+        '.main-photo img',
+        '.vehicle-image img', 
+        '.slick-slide img',
+        '.detail-page-slider img',
+        '.car-slider img',
+        '.listing-main-image img',
+        '.carousel-inner img',
+        '.carousel img:first-child',
+        '.detail-images img',
+        '.detail-image img',
+        '#vehicle-images img',
+        '.nav-slider img',
+        
+        // Aggressive selectors for Nova Autoland (last resort)
+        '.photos-wrapper img',
+        '.photo-gallery img',
+        '.images-container img',
+        '.wp-block-gallery img',
+        'div[class*="gallery"] img',
+        'div[class*="slider"] img',
+        'div[class*="carousel"] img',
+        'div[class*="photos"] img',
+        'div[class*="images"] img',
+        '.elementor-image-gallery img',
+        '.elementor-widget img'
+      ] : []),
+      // General selectors for all dealerships
+      '[itemprop="image"]',
+      '[class*="main-image"] img',
+      '[class*="primary-image"] img',
+      '[class*="featured-image"] img',
+      '[class*="hero-image"] img',
+      '[class*="vehicle-image"] img',
+      '[class*="car-image"] img',
+      '.gallery img',
+      '[id*="image"] img',
+      '.carousel img',
+      '.slider img'
+    ];
+    
+    // First look for a specific main image
+    for (const selector of imageSelectors) {
+      $(selector).each((_, element) => {
+        const src = $(element).attr('src') || $(element).attr('data-src') || $(element).attr('data-lazy-src') || 
+                   $(element).attr('data-original') || $(element).attr('data-image');
+        
+        if (src) {
+          try {
+            // Skip placeholder images
+            if (src.includes('data:image/svg+xml') || src.includes('blank.gif') || 
+                src.includes('placeholder') || src.includes('no-image')) {
+              return; // Skip this iteration
+            }
+            
+            const fullImageUrl = new URL(src, url).toString();
+            if (!imageUrls.includes(fullImageUrl)) {
+              imageUrls.push(fullImageUrl);
+            }
+          } catch (e) {
+            console.log(`Invalid image URL: ${src}`);
+          }
+        }
+      });
+      
+      // For standard dealers, we want to collect more than just the first image
+      if (imageUrls.length > 0 && !isNovaAutoland && !isNumber1AutoGroup && !isAutoGalleria) {
+        break;
+      }
+      
+      // For Nova Autoland, collect up to 5 images before breaking
+      if (isNovaAutoland && imageUrls.length >= 5) {
+        console.log(`Found ${imageUrls.length} images for Nova Autoland vehicle`);
+        break;
+      }
+      
+      // For Number 1 Auto Group, collect up to 8 images before breaking
+      if (isNumber1AutoGroup && imageUrls.length >= 8) {
+        console.log(`Found ${imageUrls.length} images for Number 1 Auto Group vehicle`);
+        break;
+      }
+      
+      // For Auto Galleria, collect up to 6 images before breaking
+      if (isAutoGalleria && imageUrls.length >= 6) {
+        console.log(`Found ${imageUrls.length} images for Auto Galleria vehicle`);
+        break;
+      }
+    }
+    
+    // Check if we have enough images before continuing with fallbacks
+    
+    // If no images found with selectors, take quality images from the page
+    if (imageUrls.length === 0 || 
+        (isNovaAutoland && imageUrls.length < 3) || 
+        (isNumber1AutoGroup && imageUrls.length < 2) || 
+        (isAutoGalleria && imageUrls.length < 2)) {
+      console.log(`Using general image fallback${
+        isNovaAutoland ? ' for Nova Autoland' : 
+        (isNumber1AutoGroup ? ' for Number 1 Auto Group' : 
+        (isAutoGalleria ? ' for Auto Galleria' : ''))}`);
+      
+      // For Number 1 Auto Group, look for specific image elements
+      if (isNumber1AutoGroup) {
+        // Number 1 Auto Group specific image patterns
+        const number1AutoImagePatterns = [
+          'dealercarsearch.com',
+          'dealerinspire.com',
+          'dealerfire.com',
+          'number1auto.com/images',
+          'cloudfront.net',
+          'carspecs.us',
+          'assets-vehicles',
+          'photos-vehicles',
+          'img.vendorlink.com',
+          'pictures.dealer.com',
+          'pse-images.dealer.com',
+          'media.assets.syncron.com',
+          'azd.impactdata.com',
+          'vehiclephotos.vauto.com'
+        ];
+        
+        // Look specifically for data-src attributes that are common in Number 1 Auto Group
+        $('img[data-src]').each((_, element) => {
+          const dataSrc = $(element).attr('data-src');
+          if (dataSrc) {
+            try {
+              // Check if it's a valid image URL
+              if (dataSrc.match(/\.(jpg|jpeg|png|webp)($|\?)/i) && 
+                  !dataSrc.includes('placeholder') && 
+                  !dataSrc.includes('blank.gif')) {
+                const fullImageUrl = new URL(dataSrc, url).toString();
+                if (!imageUrls.includes(fullImageUrl)) {
+                  imageUrls.push(fullImageUrl);
+                  console.log(`Found Number 1 Auto Group image from data-src: ${fullImageUrl}`);
+                }
+              }
+            } catch (e) {
+              console.log(`Invalid Number 1 Auto Group data-src URL: ${dataSrc}`);
+            }
+          }
+        });
+        
+        // Look for image galleries in specific class patterns for Number 1 Auto Group
+        $('.i08r-gallery, .i08r_image, .thumb-item, .car-photos, .carousel-inner, .vehicle-images, .vehicle-photos, .vehicle-gallery, .vehicle-carousel, .gallery-container, .photo-container, [class*="photo"], [class*="gallery"]').find('img').each((_, element) => {
+          const src = $(element).attr('src') || $(element).attr('data-src') || $(element).attr('data-original');
+          
+          if (src && !src.includes('data:image/svg+xml') && !src.includes('blank.gif') && 
+              !src.includes('placeholder') && !src.includes('no-image')) {
+            try {
+              const fullImageUrl = new URL(src, url).toString();
+              if (!imageUrls.includes(fullImageUrl)) {
+                imageUrls.push(fullImageUrl);
+                console.log(`Found Number 1 Auto Group image via gallery: ${fullImageUrl}`);
+              }
+            } catch (e) {
+              console.log(`Invalid Number 1 Auto Group image URL: ${src}`);
+            }
+          }
+        });
+        
+        // Look for data attributes that might contain image arrays - Number 1 Auto Group version
+        $('[data-images], [data-gallery], [data-photos], [data-src], [data-lazy-src], [data-srcset], [data-full], [data-large], [data-lightbox], [data-slide-src], [data-original], [data-img], [data-thumb]').each((_, element) => {
+          // Try all potential data attributes that might contain image information
+          const dataAttrs = [
+            'data-images', 'data-gallery', 'data-photos', 'data-src', 'data-lazy-src',
+            'data-srcset', 'data-full', 'data-large', 'data-lightbox', 'data-zoom',
+            'data-slide-src', 'data-original', 'data-img', 'data-thumb'
+          ];
+          
+          for (const attrName of dataAttrs) {
+            const dataAttr = $(element).attr(attrName);
+            if (!dataAttr) continue;
+            
+            // Check if it's a direct URL first
+            if (dataAttr.match(/\.(jpg|jpeg|png|webp)/i)) {
+              try {
+                const fullImageUrl = new URL(dataAttr, url).toString();
+                if (!imageUrls.includes(fullImageUrl)) {
+                  imageUrls.push(fullImageUrl);
+                  console.log(`Found Number 1 Auto Group direct image URL in ${attrName}: ${fullImageUrl}`);
+                }
+              } catch (e) {
+                // Not a valid URL
+              }
+              continue;
+            }
+            
+            // Try to parse as JSON
+            try {
+              const images = JSON.parse(dataAttr);
+              if (Array.isArray(images)) {
+                for (const img of images) {
+                  // Check if img is a string or an object with url, src, or path properties
+                  const imgUrl = typeof img === 'string' ? 
+                                img : 
+                                (img && typeof img === 'object' ? 
+                                  (img.url || img.src || img.path || img.full || img.large || null) : 
+                                  null);
+                  if (imgUrl) {
+                    try {
+                      const fullImageUrl = new URL(imgUrl, url).toString();
+                      if (!imageUrls.includes(fullImageUrl)) {
+                        imageUrls.push(fullImageUrl);
+                        console.log(`Found Number 1 Auto Group image from ${attrName} JSON: ${fullImageUrl}`);
+                      }
+                    } catch (e) {
+                      console.log(`Invalid image URL in data attribute: ${imgUrl}`);
+                    }
+                  }
+                }
+              } else if (typeof images === 'object' && images !== null) {
+                // Check if it's an object with image URLs as properties
+                for (const key in images) {
+                  if (typeof images[key] === 'string' && images[key].match(/\.(jpg|jpeg|png|webp)/i)) {
+                    try {
+                      const fullImageUrl = new URL(images[key], url).toString();
+                      if (!imageUrls.includes(fullImageUrl)) {
+                        imageUrls.push(fullImageUrl);
+                        console.log(`Found Number 1 Auto Group image from ${attrName} object: ${fullImageUrl}`);
+                      }
+                    } catch (e) {
+                      // Skip invalid URLs
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              // Not valid JSON, continue to next attribute
+            }
+          }
+        });
+        
+        // Check all scripts for image URLs
+        $('script').each((_, element) => {
+          const scriptContent = $(element).html();
+          if (scriptContent) {
+            try {
+              // Look for URL patterns that would indicate vehicle images
+              const urlMatches = scriptContent.match(/(https?:\/\/[^"'\s]+\.(?:jpg|jpeg|png|webp))/gi);
+              if (urlMatches && urlMatches.length > 0) {
+                for (const imageUrl of urlMatches) {
+                  // Only add if it looks like a Number 1 Auto Group image path
+                  if (number1AutoImagePatterns.some(pattern => imageUrl.includes(pattern)) && !imageUrls.includes(imageUrl)) {
+                    imageUrls.push(imageUrl);
+                    console.log(`Found Number 1 Auto Group image in script: ${imageUrl}`);
+                  }
+                }
+              }
+            } catch (e) {
+              // Ignore errors in individual scripts
+            }
+          }
+        });
+      }
+      
+      // For Auto Galleria, look for specific image elements
+      if (isAutoGalleria) {
+        console.log('Applying Auto Galleria specific image fallback');
+      
+        // Auto Galleria specific image patterns
+        const autoGalleriaImagePatterns = [
+          'autogalleriava.com/photos',
+          'dealercarsearch.com',
+          'inventoryphotos',
+          'cloudfront.net/vehicles',
+          'dealer-cdn.com',
+          'autoverl.com',
+          'drivetime.com',
+          'carspecs.us'
+        ];
+        
+        // Check all image elements specifically for Auto Galleria
+        $('img').each((_, element) => {
+          const src = $(element).attr('src');
+          if (src) {
+            try {
+              // Ignore common non-vehicle images
+              if (src.includes('logo') || src.includes('icon') || src.includes('button')) {
+                return;
+              }
+              
+              // Check if the image URL contains any of the Auto Galleria patterns
+              if (autoGalleriaImagePatterns.some(pattern => src.includes(pattern))) {
+                const fullImageUrl = new URL(src, url).toString();
+                if (!imageUrls.includes(fullImageUrl)) {
+                  imageUrls.push(fullImageUrl);
+                  console.log(`Found Auto Galleria image with specific pattern: ${fullImageUrl}`);
+                }
+              } 
+              // Also add any image that looks like a vehicle photo (large image with jpg/jpeg/png extension)
+              else if (src.match(/\.(jpg|jpeg|png)($|\?)/i) && !src.includes('placeholder')) {
+                const fullImageUrl = new URL(src, url).toString();
+                if (!imageUrls.includes(fullImageUrl)) {
+                  imageUrls.push(fullImageUrl);
+                  console.log(`Found Auto Galleria potential vehicle image: ${fullImageUrl}`);
+                }
+              }
+            } catch (e) {
+              console.log(`Invalid Auto Galleria image URL: ${src}`);
+            }
+          }
+          
+          // Also check for data-original and data-src attributes which are common in Auto Galleria
+          const dataOriginal = $(element).attr('data-original');
+          if (dataOriginal && !dataOriginal.includes('logo') && !dataOriginal.includes('button')) {
+            try {
+              const fullImageUrl = new URL(dataOriginal, url).toString();
+              if (!imageUrls.includes(fullImageUrl)) {
+                imageUrls.push(fullImageUrl);
+                console.log(`Found Auto Galleria image via data-original: ${fullImageUrl}`);
+              }
+            } catch (e) {
+              console.log(`Invalid Auto Galleria data-original URL: ${dataOriginal}`);
+            }
+          }
+          
+          const dataSrc = $(element).attr('data-src');
+          if (dataSrc && !dataSrc.includes('logo') && !dataSrc.includes('button')) {
+            try {
+              const fullImageUrl = new URL(dataSrc, url).toString();
+              if (!imageUrls.includes(fullImageUrl)) {
+                imageUrls.push(fullImageUrl);
+                console.log(`Found Auto Galleria image via data-src: ${fullImageUrl}`);
+              }
+            } catch (e) {
+              console.log(`Invalid Auto Galleria data-src URL: ${dataSrc}`);
+            }
+          }
+        });
+        
+        // Look for gallery links
+        $('a[data-fancybox], a.fancybox, a[rel*="gallery"], a[href*=".jpg"], a[href*=".jpeg"], a[href*=".png"]').each((_, element) => {
+          const href = $(element).attr('href');
+          if (href && (href.includes('.jpg') || href.includes('.jpeg') || href.includes('.png'))) {
+            try {
+              const fullImageUrl = new URL(href, url).toString();
+              if (!imageUrls.includes(fullImageUrl)) {
+                imageUrls.push(fullImageUrl);
+                console.log(`Found Auto Galleria image in gallery link: ${fullImageUrl}`);
+              }
+            } catch (e) {
+              console.log(`Invalid Auto Galleria gallery image URL: ${href}`);
+            }
+          }
+        });
+        
+        // Look in all script tags for image URLs
+        $('script').each((_, element) => {
+          const scriptContent = $(element).html();
+          if (scriptContent) {
+            try {
+              // Look for URL patterns that would indicate vehicle images
+              const urlMatches = scriptContent.match(/(https?:\/\/[^"'\s]+\.(?:jpg|jpeg|png|webp))/gi);
+              if (urlMatches && urlMatches.length > 0) {
+                for (const imageUrl of urlMatches) {
+                  if (!imageUrls.includes(imageUrl) && 
+                      !imageUrl.includes('logo') && 
+                      !imageUrl.includes('icon') && 
+                      !imageUrl.includes('button')) {
+                    imageUrls.push(imageUrl);
+                    console.log(`Found Auto Galleria image in script: ${imageUrl}`);
+                  }
+                }
+              }
+            } catch (e) {
+              // Ignore errors in individual scripts
+            }
+          }
+        });
+      }
+      // For Nova Autoland, look for specific image elements
+      else if (isNovaAutoland) {
+        // Additional Nova Autoland specific attempt - search for specific image patterns
+        const novaImagePatterns = [
+          'imagescdn.dealercarsearch.com',
+          '.cloudfront.net/vehicle/', 
+          'photos.ecarlist.com',
+          'photos.dealercarsearch',
+          'novaautoland.com/images/vehicles',
+          'nova-autoland',
+          'cdn.ebizautos.com'
+        ];
+        
+        // Check all image elements explicitly
+        $('img').each((_, element) => {
+          const src = $(element).attr('src');
+          if (src) {
+            try {
+              // Check if the image URL contains any of the Nova Autoland patterns
+              if (novaImagePatterns.some(pattern => src.includes(pattern))) {
+                const fullImageUrl = new URL(src, url).toString();
+                if (!imageUrls.includes(fullImageUrl)) {
+                  imageUrls.push(fullImageUrl);
+                  console.log(`Found Nova Autoland image with specific pattern: ${fullImageUrl}`);
+                }
+              }
+            } catch (e) {
+              console.log(`Invalid Nova Autoland image URL: ${src}`);
+            }
+          }
+        });
+        
+        // Try to find fotorama data
+        const fotoramaScript = $('script:contains("fotorama")').text();
+        if (fotoramaScript) {
+          try {
+            // Look for image URLs patterns in the script
+            const urlMatches = fotoramaScript.match(/(https?:\/\/[^"'\s]+\.(?:jpg|jpeg|png|webp))/gi);
+            if (urlMatches && urlMatches.length > 0) {
+              for (const imageUrl of urlMatches) {
+                if (!imageUrls.includes(imageUrl)) {
+                  imageUrls.push(imageUrl);
+                  console.log(`Found Nova Autoland image from fotorama script: ${imageUrl}`);
+                }
+              }
+            }
+          } catch (e) {
+            console.log(`Error parsing fotorama script: ${e}`);
+          }
+        }
+        
+        // Check all scripts for image URLs
+        $('script').each((_, element) => {
+          const scriptContent = $(element).html();
+          if (scriptContent) {
+            try {
+              // Look for URL patterns that would indicate vehicle images
+              const urlMatches = scriptContent.match(/(https?:\/\/[^"'\s]+\.(?:jpg|jpeg|png|webp))/gi);
+              if (urlMatches && urlMatches.length > 0) {
+                for (const imageUrl of urlMatches) {
+                  // Only add if it looks like a Nova Autoland image path
+                  if (novaImagePatterns.some(pattern => imageUrl.includes(pattern)) && !imageUrls.includes(imageUrl)) {
+                    imageUrls.push(imageUrl);
+                    console.log(`Found Nova Autoland image in script: ${imageUrl}`);
+                  }
+                }
+              }
+            } catch (e) {
+              // Ignore errors in individual scripts
+            }
+          }
+        });
+        
+        // Look for data attributes that might contain image arrays
+        $('[data-images], [data-gallery], [data-photos], [data-src], [data-lazy-src], [data-srcset], [data-full], [data-large], [data-lightbox], [data-elementor-lightbox-slideshow]').each((_, element) => {
+          // Try all potential data attributes that might contain image information
+          const dataAttrs = [
+            'data-images', 'data-gallery', 'data-photos', 'data-src', 'data-lazy-src',
+            'data-srcset', 'data-full', 'data-large', 'data-lightbox', 'data-zoom',
+            'data-elementor-lightbox-slideshow', 'data-elementor-lightbox-index'
+          ];
+          
+          for (const attrName of dataAttrs) {
+            const dataAttr = $(element).attr(attrName);
+            if (!dataAttr) continue;
+            
+            // Check if it's a direct URL first
+            if (dataAttr.match(/\.(jpg|jpeg|png|webp)/i)) {
+              try {
+                const fullImageUrl = new URL(dataAttr, url).toString();
+                if (!imageUrls.includes(fullImageUrl)) {
+                  imageUrls.push(fullImageUrl);
+                  console.log(`Found Nova Autoland direct image URL in ${attrName}: ${fullImageUrl}`);
+                }
+              } catch (e) {
+                // Not a valid URL
+              }
+              continue;
+            }
+            
+            // Try to parse as JSON
+            try {
+              const images = JSON.parse(dataAttr);
+              if (Array.isArray(images)) {
+                for (const img of images) {
+                  // Check if img is a string or an object with url, src, or path properties
+                  const imgUrl = typeof img === 'string' ? 
+                                img : 
+                                (img && typeof img === 'object' ? 
+                                  (img.url || img.src || img.path || img.full || img.large || null) : 
+                                  null);
+                  if (imgUrl) {
+                    try {
+                      const fullImageUrl = new URL(imgUrl, url).toString();
+                      if (!imageUrls.includes(fullImageUrl)) {
+                        imageUrls.push(fullImageUrl);
+                        console.log(`Found Nova Autoland image from ${attrName} JSON: ${fullImageUrl}`);
+                      }
+                    } catch (e) {
+                      console.log(`Invalid image URL in data attribute: ${imgUrl}`);
+                    }
+                  }
+                }
+              } else if (typeof images === 'object' && images !== null) {
+                // Check if it's an object with image URLs as properties
+                for (const key in images) {
+                  if (typeof images[key] === 'string' && images[key].match(/\.(jpg|jpeg|png|webp)/i)) {
+                    try {
+                      const fullImageUrl = new URL(images[key], url).toString();
+                      if (!imageUrls.includes(fullImageUrl)) {
+                        imageUrls.push(fullImageUrl);
+                        console.log(`Found Nova Autoland image from ${attrName} object: ${fullImageUrl}`);
+                      }
+                    } catch (e) {
+                      // Skip invalid URLs
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              // Not valid JSON, continue to next attribute
+            }
+          }
+          
+          // Check for links inside the element that might point to images
+          $(element).find('a').each((_, linkElement) => {
+            const href = $(linkElement).attr('href');
+            if (href && href.match(/\.(jpg|jpeg|png|webp)/i)) {
+              try {
+                const fullImageUrl = new URL(href, url).toString();
+                if (!imageUrls.includes(fullImageUrl)) {
+                  imageUrls.push(fullImageUrl);
+                  console.log(`Found Nova Autoland image from link inside data element: ${fullImageUrl}`);
+                }
+              } catch (e) {
+                // Skip invalid URLs
+              }
+            }
+          });
+        });
+        
+        // Look for image elements with certain class patterns
+        $('[class*="photo"], [class*="image"], [class*="picture"], [class*="gallery"]').find('img').each((_, element) => {
+          const src = $(element).attr('src') || $(element).attr('data-src') || 
+                     $(element).attr('data-lazy-src') || $(element).attr('data-original');
+          
+          if (src && !src.includes('data:image/svg+xml') && !src.includes('blank.gif') && 
+              !src.includes('placeholder') && !src.includes('no-image')) {
+            try {
+              const fullImageUrl = new URL(src, url).toString();
+              if (!imageUrls.includes(fullImageUrl)) {
+                imageUrls.push(fullImageUrl);
+                console.log(`Found Nova Autoland image via class pattern: ${fullImageUrl}`);
+              }
+            } catch (e) {
+              console.log(`Invalid image URL: ${src}`);
+            }
+          }
+        });
+      }
+      
+      // If no images or we need more images for specialized dealers, check all img tags
+      if (imageUrls.length === 0 || (isNovaAutoland && imageUrls.length < 3) || (isNumber1AutoGroup && imageUrls.length < 3)) {
+        console.log(`Looking for additional images${isNovaAutoland ? ' for Nova Autoland' : (isNumber1AutoGroup ? ' for Number 1 Auto Group' : '')}`);
+        
+        // Process all img elements to find potential vehicle images
+        $('img').each((_, element) => {
+          // Get image attributes
+          const src = $(element).attr('src');
+          const dataSrc = $(element).attr('data-src');
+          const lazyLoadSrc = $(element).attr('data-lazy-src');
+          const imgSrc = src || dataSrc || lazyLoadSrc;
+          
+          // Skip processing if no source is found
+          if (!imgSrc) {
+            return;
+          }
+          
+          // Skip placeholder, SVG, and blank images
+          if (imgSrc.includes('data:image/svg+xml') || 
+              imgSrc.includes('blank.gif') || 
+              imgSrc.includes('placeholder') || 
+              imgSrc.includes('no-image')) {
+            return;
+          }
+          
+          // Check for image dimensions if available
+          const width = $(element).attr('width');
+          const height = $(element).attr('height');
+          const hasSufficientSize = !width || !height || (parseInt(width) > 300 && parseInt(height) > 200);
+          
+          // Only add reasonably sized images
+          if (hasSufficientSize) {
+            try {
+              const fullImageUrl = new URL(imgSrc, url).toString();
+              if (!imageUrls.includes(fullImageUrl)) {
+                imageUrls.push(fullImageUrl);
+                console.log(`Found image via general selector: ${fullImageUrl}`);
+              }
+            } catch (e) {
+              console.log(`Invalid image URL: ${imgSrc}`);
+            }
+          }
+        });
+      }
+    }
+    
+    // Look for Carfax link
+    $('a').each((_, element) => {
+      const href = $(element).attr('href');
+      const text = $(element).text().toLowerCase();
+      
+      if (href && (
+        href.includes('carfax.com') || 
+        text.includes('carfax') || 
+        href.includes('vehicle-history') ||
+        href.includes('history-report')
+      )) {
+        try {
+          carfaxUrl = new URL(href, url).toString();
+        } catch (e) {
+          console.log(`Invalid Carfax URL: ${href}`);
+        }
+      }
+    });
+    
+    // Set contact URL (either a specific contact form or the listing URL itself)
+    $('a').each((_, element) => {
+      const href = $(element).attr('href');
+      const text = $(element).text().toLowerCase();
+      
+      if (href && (
+        text.includes('contact') || 
+        text.includes('inquiry') || 
+        text.includes('more info') ||
+        text.includes('get in touch') ||
+        text.includes('request info') ||
+        href.includes('contact') || 
+        href.includes('inquiry') ||
+        href.includes('form')
+      )) {
+        try {
+          contactUrl = new URL(href, url).toString();
+        } catch (e) {
+          console.log(`Invalid contact URL: ${href}`);
+        }
+      }
+    });
+    
+    // If no specific contact URL found, use the vehicle listing URL
+    if (!contactUrl) {
+      contactUrl = url;
+    }
+    
+    // For specialized dealerships, sort and organize images to prioritize the best ones first
+    if ((isNovaAutoland || isNumber1AutoGroup) && imageUrls.length > 0) {
+      // Set a flag for logging purposes
+      const dealerName = isNovaAutoland ? 'Nova Autoland' : 'Number 1 Auto Group';
+      // Save original count for logging
+      const originalImageCount = imageUrls.length;
+      
+      // Filter out obviously bad images first - much more aggressive filtering
+      imageUrls = imageUrls.filter(img => {
+        // We want only good quality actual vehicle photos
+        // Exclude common non-vehicle image patterns
+        const badPatterns = [
+          'logo', 'badge-', '-badge', 'icon-', '-icon', 'button-', '-button', 'sprite', 'trust',
+          'carfax-', 'carfax.', 'carfax/', // Don't exclude all carfax since some dealers use it in image paths
+          'svg', 'valuebadge', 'banner', 'guarantee', 'certified-', '-certified',
+          'footer', 'header', 'check-mark', 'checkmark', 'deal-', 'special-'
+        ];
+        
+        // Special case for Media folder - it always contains valid images
+        if (img.includes('dealercarsearch.com/Media/')) {
+          return true; // Always keep dealercarsearch.com/Media/ images
+        }
+        
+        // Special skip for known good image paths like Direct/Vehicle
+        if (img.match(/Direct\/Vehicle/) || img.match(/\/vehicles\//) || img.match(/\/vehicle\//)) {
+          return true; // These are extremely likely to be vehicle images
+        }
+        
+        // Check if URL contains any bad patterns
+        const hasBadPattern = badPatterns.some(pattern => img.toLowerCase().includes(pattern));
+        if (hasBadPattern) return false;
+        
+        // Additional checks for specific known non-vehicle image sources
+        if (img.includes('DealerImages')) return false;
+        if (img.includes('partnerstatic.carfax.com')) return false;
+        
+        // Accept only common image extensions - extra safety check
+        const hasValidExtension = /\.(jpg|jpeg|png|webp)($|\?)/.test(img.toLowerCase());
+        
+        return hasValidExtension;
+      });
+      
+      // Prioritize images that are likely to be the main vehicle photo
+      imageUrls.sort((a, b) => {
+        // First, prioritize images from certain sources that are typically higher quality
+        const highQualityPatterns = [
+          '.cloudfront.net/vehicle/',
+          'imagescdn.dealercarsearch.com/Media/', // This is specifically the Nova Autoland pattern
+          'photos.ecarlist.com',
+          'cdn.ebizautos.com',
+          'novaautoland.com/images/vehicles',
+          // Number 1 Auto Group patterns
+          'number1auto.com/images',
+          'dealercarsearch.com/Media/',
+          'dealerinspire.com/images',
+          'carspecs.us/photos'
+        ];
+        
+        // Check for exact Media pattern in image paths that we know are good
+        const aIsNovaDealerSearch = a.includes('imagescdn.dealercarsearch.com/Media/');
+        const bIsNovaDealerSearch = b.includes('imagescdn.dealercarsearch.com/Media/');
+        
+        // Prioritize the dealercarsearch.com Media pattern above all else
+        if (aIsNovaDealerSearch && !bIsNovaDealerSearch) return -1;
+        if (!aIsNovaDealerSearch && bIsNovaDealerSearch) return 1;
+        
+        // Next, prioritize other high quality sources
+        const aIsHighQuality = highQualityPatterns.some(pattern => a.includes(pattern));
+        const bIsHighQuality = highQualityPatterns.some(pattern => b.includes(pattern));
+        
+        if (aIsHighQuality && !bIsHighQuality) return -1;
+        if (!aIsHighQuality && bIsHighQuality) return 1;
+        
+        // Next, deprioritize small images and thumbnails
+        const aIsSmall = a.includes('small') || a.includes('thumb') || a.includes('tiny');
+        const bIsSmall = b.includes('small') || b.includes('thumb') || b.includes('tiny');
+        
+        if (!aIsSmall && bIsSmall) return -1;
+        if (aIsSmall && !bIsSmall) return 1;
+        
+        // Finally, prioritize exterior shots (typically labeled "EXT" or first in sequence) for Nova
+        // Look at the filename to guess which is the main exterior shot
+        const aFileName = a.split('/').pop()?.toLowerCase() || '';
+        const bFileName = b.split('/').pop()?.toLowerCase() || '';
+        
+        if (aFileName.includes('ext') && !bFileName.includes('ext')) return -1;
+        if (!aFileName.includes('ext') && bFileName.includes('ext')) return 1;
+        
+        // Finally, sort by numbered sequence (prefer lower numbers that are usually exterior shots)
+        // Extract any sequence number from the filename
+        const aMatch = aFileName.match(/(\d+)\.(jpg|jpeg|png|webp)$/i);
+        const bMatch = bFileName.match(/(\d+)\.(jpg|jpeg|png|webp)$/i);
+        
+        if (aMatch && bMatch) {
+          const aNumber = parseInt(aMatch[1], 10);
+          const bNumber = parseInt(bMatch[1], 10);
+          return aNumber - bNumber; // Lower numbers first
+        }
+        
+        return 0;
+      });
+      
+      console.log(`Sorted ${imageUrls.length} ${dealerName} images for ${make} ${model} (${vin})`);
+      if (imageUrls.length > 0) {
+        console.log(`  First image: ${imageUrls[0]}`);
+        console.log(`  Last image: ${imageUrls[imageUrls.length - 1]}`);
+      } else {
+        console.log(`  No images found for vehicle. Original image count before filtering: ${originalImageCount}`);
+      }
+    }
+    
+    // Construct the vehicle object
+    const vehicle: InsertVehicle = {
+      title: `${year} ${make} ${model}`.trim() || 'Unknown Vehicle',
+      dealershipId,
+      vin,
+      make: make || 'Unknown',
+      model: model || 'Unknown',
+      year: year || new Date().getFullYear(),
+      price: price || 0,
+      mileage: mileage || 0,
+      location: 'Chantilly, VA', // Default location based on dealership
+      zipCode: '20152', // Default zipCode based on dealership
+      images: imageUrls.length > 0 ? imageUrls : [],
+      carfaxUrl: carfaxUrl || undefined,
+      contactUrl: contactUrl || url,
+      originalListingUrl: url
+    };
+    
+    return vehicle;
+  } catch (error) {
+    console.error(`Error scraping ${url}:`, error);
+    return null;
+  }
+}
+
+export function extractDealershipName(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    const domain = urlObj.hostname.replace('www.', '');
+    
+    // Extract domain name without TLD
+    const domainParts = domain.split('.');
+    
+    if (domainParts.length >= 2) {
+      // For domains like example.com, take 'example'
+      const name = domainParts[0]
+        .split('-')
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ');
+      
+      return name;
+    }
+    
+    return domain;
+  } catch (error) {
+    // Fallback to a simple extraction
+    const cleanUrl = url.replace(/^https?:\/\//, '').replace(/^www\./, '');
+    const firstPart = cleanUrl.split('/')[0].split('.')[0];
+    return firstPart.charAt(0).toUpperCase() + firstPart.slice(1);
+  }
+}

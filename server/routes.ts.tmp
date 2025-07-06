@@ -1,0 +1,135 @@
+import { Express, Request, Response, NextFunction } from "express";
+import { storage } from "./storage";
+import { scrapeDealership } from "./scraper";
+import { scheduler } from "./scheduler";
+import session from "express-session";
+import MemoryStore from "memorystore";
+import passport from "passport";
+import { Strategy as LocalStrategy } from "passport-local";
+import multer from "multer";
+import fs from "fs";
+import path from "path";
+import fetch from "node-fetch";
+import { Server } from "http";
+import { db } from "./db";
+import { InsertVehicle, vehicles, dealerships } from "@shared/schema";
+import cheerio from "cheerio";
+import { generateVehicleCardsHTML } from "./screenshot-service";
+import { logger } from "@shared/logger";
+import { and, asc, desc, eq, gt, ilike, inArray, like, or, sql } from "drizzle-orm";
+import { archiveVehicle } from "./vehicle-archive";
+
+const DEFAULT_LIMIT = 12;
+const MAXIMUM_LIMIT = 36;
+
+export async function registerRoutes(app: Express): Promise<Server> {
+  const MS = MemoryStore(session);
+  
+  // Setup session
+  app.use(session({
+    secret: process.env.SESSION_SECRET || 'veh1cle-s3cr3t-123!',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { 
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    },
+    store: new MS({
+      checkPeriod: 86400000 // prune expired entries every 24h
+    })
+  }));
+  
+  // Initialize passport
+  app.use(passport.initialize());
+  app.use(passport.session());
+  
+  // Set up authentication strategy
+  passport.use(new LocalStrategy(
+    async (username, password, done) => {
+      try {
+        // Check the admin credentials
+        const correctUsername = process.env.ADMIN_USERNAME || 'admin';
+        const correctPassword = process.env.ADMIN_PASSWORD || 'password123';
+        
+        if (username === correctUsername && password === correctPassword) {
+          return done(null, { id: 1, username });
+        } else {
+          return done(null, false, { message: 'Incorrect username or password' });
+        }
+      } catch (error) {
+        return done(error);
+      }
+    }
+  ));
+  
+  // Serialize and deserialize user
+  passport.serializeUser((user: any, done) => {
+    done(null, user.id);
+  });
+  
+  passport.deserializeUser((id: number, done) => {
+    // For simplicity, just return a user object since we only have one admin user
+    if (id === 1) {
+      done(null, { id: 1, username: process.env.ADMIN_USERNAME || 'admin' });
+    } else {
+      done(new Error('User not found'), null);
+    }
+  });
+  
+  /**
+   * Authentication middleware to protect routes
+   */
+  const isAuthenticated = (req: Request, res: Response, next: Function) => {
+    if (req.isAuthenticated()) {
+      return next();
+    }
+    res.status(401).json({ message: 'Unauthorized' });
+  };
+  
+  // Set up routes
+  
+  // Auth routes
+  app.post('/api/auth/login', passport.authenticate('local'), (req, res) => {
+    res.json({ message: 'Login successful', user: req.user });
+  });
+  
+  app.post('/api/auth/logout', (req, res) => {
+    req.logout(() => {
+      res.json({ message: 'Logout successful' });
+    });
+  });
+  
+  app.get('/api/auth/status', (req, res) => {
+    res.json({ isAuthenticated: req.isAuthenticated() });
+  });
+  
+  // --- TESTING ROUTE FOR INSPECTED AUTO SYNC ---
+  // Add a testing route to trigger Inspected Auto sync
+  app.get('/api/trigger-inspected-auto-sync', isAuthenticated, async (req, res) => {
+    try {
+      // Find Inspected Auto dealership
+      const dealerships = await storage.getAllDealerships();
+      const inspectedAuto = dealerships.find(d => d.name.toLowerCase().includes('inspected auto'));
+      
+      if (!inspectedAuto) {
+        return res.status(404).json({ message: 'Inspected Auto dealership not found' });
+      }
+      
+      // Reset lastSynced to force a sync
+      await storage.updateDealership(inspectedAuto.id, { lastSynced: null });
+      
+      // Trigger the sync
+      await scheduler.syncDealership(inspectedAuto.id);
+      
+      return res.json({ message: 'Inspected Auto sync triggered successfully' });
+    } catch (error) {
+      console.error('Error triggering Inspected Auto sync:', error);
+      return res.status(500).json({ message: 'Error triggering sync', error: String(error) });
+    }
+  });
+  // --- END TESTING ROUTE ---
+
+  // Rest of routes...
+
+  return app;
+}

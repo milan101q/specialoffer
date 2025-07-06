@@ -1,0 +1,11 @@
+1034:export function extractSuperBeeAutoVehicle($: CheerioRoot, url: string, dealershipId: number, dealershipName: string, dealerLocation: string, dealerZipCode: string | null): InsertVehicle {
+1035-  // Specialized Super Bee Auto extraction logic
+1036-  console.log(`Extracting Super Bee Auto vehicle data from URL: ${url}`);
+1037-  
+1038-  // First try to extract JSON-LD data which is more accurate when available
+1039-  const jsonLdData = extractJsonLdData($);
+1040-  console.log(jsonLdData ? `Found JSON-LD data for vehicle` : `No JSON-LD data found for vehicle`);
+1041-  
+1042-  // Parse URL path to extract info if possible
+1043-  let make = '';
+1044-  let model = '';

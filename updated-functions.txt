@@ -1,0 +1,309 @@
+function extractAHQualityCarsVehicle($: CheerioRoot, url: string, dealershipId: number, dealershipName: string, dealerLocation: string, dealerZipCode: string | null): InsertVehicle {
+  // Specialized A & H Quality Cars extraction logic
+  console.log(`Extracting A & H Quality Cars vehicle data`);
+  
+  // Extract title
+  let title = $('h1, .vehicle-title, .detail-title').first().text().trim();
+  console.log(`Found A & H Quality Cars title: ${title}`);
+  
+  // Extract make, model, year
+  const titleParts = parseVehicleTitle(title);
+  const year = titleParts.year;
+  const make = titleParts.make;
+  const model = titleParts.model;
+  
+  // Extract price
+  let price = 0;
+  const priceText = $('.price, .asking-price, [itemprop="price"]').first().text().trim();
+  if (priceText) {
+    price = parsePrice(priceText);
+  }
+  console.log(`Found A & H Quality Cars price: $${price}`);
+  
+  // Extract mileage
+  let mileage = 0;
+  const mileageText = $('.mileage, .odometer, [itemprop="mileageFromOdometer"]').first().text().trim();
+  if (mileageText) {
+    mileage = parseMileage(mileageText);
+  }
+  
+  // If not found with direct selectors, try to find mileage in any element containing 'miles'
+  if (mileage === 0) {
+    $('*:contains("miles")').each(function() {
+      const text = $(this).text().trim().toLowerCase();
+      if (text.includes('miles') && text.match(/[0-9,]+\s*miles/)) {
+        const mileageMatch = text.match(/([0-9,]+)\s*miles/);
+        if (mileageMatch && mileageMatch[1]) {
+          mileage = parseMileage(mileageMatch[0]);
+          return false; // break the loop
+        }
+      }
+    });
+  }
+  console.log(`Found A & H Quality Cars mileage: ${mileage} miles`);
+  
+  // Extract VIN
+  let vin = '';
+  $('.vin, [itemprop="vehicleIdentificationNumber"]').each(function() {
+    const text = $(this).text().trim();
+    const vinMatch = text.match(/([A-HJ-NPR-Z0-9]{17})/i);
+    if (vinMatch && vinMatch[1]) {
+      vin = vinMatch[1].toUpperCase();
+      return false; // break the loop
+    }
+  });
+  
+  // If VIN not found, look for elements containing 'VIN'
+  if (!vin) {
+    $('*:contains("VIN")').each(function() {
+      const text = $(this).text().trim();
+      const vinMatch = text.match(/VIN:?\s*([A-HJ-NPR-Z0-9]{17})/i);
+      if (vinMatch && vinMatch[1]) {
+        vin = vinMatch[1].toUpperCase();
+        return false; // break the loop
+      }
+    });
+  }
+  console.log(`Found A & H Quality Cars VIN: ${vin}`);
+  
+  // Extract images - A & H Quality Cars often uses data-src for lazy loading
+  const images: string[] = [];
+  $('img[data-src*="dealercarsearch.com/Media/"], img[src*="dealercarsearch.com/Media/"]').each(function() {
+    const src = $(this).attr('data-src') || $(this).attr('src');
+    if (src && !images.includes(src) && isValidImageUrl(src)) {
+      console.log(`Found A & H Quality Cars image: ${src}`);
+      images.push(src);
+    }
+  });
+  
+  // If no specific dealer images found, try looking for any vehicle images
+  if (images.length === 0) {
+    $('.vehicle-image img, .vehicle-photo img, .thumbnail img').each(function() {
+      const src = $(this).attr('data-src') || $(this).attr('src');
+      if (src && !images.includes(src) && isValidImageUrl(src)) {
+        console.log(`Found A & H Quality Cars image from generic selectors: ${src}`);
+        images.push(src);
+      }
+    });
+  }
+  
+  // Last resort: try to find any image on the page
+  if (images.length === 0) {
+    $('img').each(function() {
+      const src = $(this).attr('data-src') || $(this).attr('src');
+      if (src && !images.includes(src) && isValidImageUrl(src) && src.toLowerCase().includes('vehicle')) {
+        console.log(`Found A & H Quality Cars image via any img search: ${src}`);
+        images.push(src);
+      }
+    });
+  }
+  
+  // Construct vehicle object
+  const vehicle: InsertVehicle = {
+    dealershipId,
+    title: title || `${year} ${make} ${model}`,
+    make,
+    model,
+    year,
+    price,
+    mileage,
+    vin,
+    images,
+    location: dealerLocation, // Use location from dealership data
+    zipCode: dealerZipCode, // Use ZIP code from dealership data
+    originalListingUrl: url
+  };
+  
+  console.log(`Extracted A & H Quality Cars vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
+  return vehicle;
+}
+
+function extractNineStarsAutoVehicle($: CheerioRoot, url: string, dealershipId: number, dealershipName: string, dealerLocation: string, dealerZipCode: string | null): InsertVehicle {
+  // Specialized Nine Stars Auto extraction logic
+  console.log(`Extracting Nine Stars Auto vehicle data`);
+  
+  // Extract title
+  let title = $('h1, .vehicle-title, .inventory-title').first().text().trim();
+  console.log(`Found Nine Stars Auto title: ${title}`);
+  
+  // Extract make, model, year
+  const titleParts = parseVehicleTitle(title);
+  const year = titleParts.year;
+  const make = titleParts.make;
+  const model = titleParts.model;
+  
+  // Extract price
+  let price = 0;
+  const priceText = $('.price, .vehicle-price, .asking-price').first().text().trim();
+  if (priceText) {
+    price = parsePrice(priceText);
+  }
+  
+  // If not found, try to find price in any element containing '$'
+  if (price === 0) {
+    $('*:contains("$")').each(function() {
+      const text = $(this).text().trim();
+      if (text.match(/\$[0-9,]+/)) {
+        const priceMatch = text.match(/\$([0-9,]+)/);
+        if (priceMatch && priceMatch[1]) {
+          price = parsePrice(priceMatch[0]);
+          return false; // break the loop
+        }
+      }
+    });
+  }
+  console.log(`Found Nine Stars Auto price: $${price}`);
+  
+  // Extract mileage
+  let mileage = 0;
+  const mileageText = $('.mileage, .vehicle-mileage, [itemprop="mileageFromOdometer"]').first().text().trim();
+  if (mileageText) {
+    mileage = parseMileage(mileageText);
+  }
+  
+  // If not found with direct selectors, try to find in any element containing 'miles'
+  if (mileage === 0) {
+    $('*:contains("miles")').each(function() {
+      const text = $(this).text().trim().toLowerCase();
+      if (text.includes('miles') && text.match(/[0-9,]+\s*miles/)) {
+        const mileageMatch = text.match(/([0-9,]+)\s*miles/);
+        if (mileageMatch && mileageMatch[1]) {
+          mileage = parseMileage(mileageMatch[0]);
+          return false; // break the loop
+        }
+      }
+    });
+  }
+  console.log(`Found Nine Stars Auto mileage: ${mileage} miles`);
+  
+  // Extract VIN
+  let vin = '';
+  $('.vin, [itemprop="vehicleIdentificationNumber"]').each(function() {
+    const text = $(this).text().trim();
+    const vinMatch = text.match(/([A-HJ-NPR-Z0-9]{17})/i);
+    if (vinMatch && vinMatch[1]) {
+      vin = vinMatch[1].toUpperCase();
+      return false; // break the loop
+    }
+  });
+  
+  // If VIN not found, look for elements containing 'VIN'
+  if (!vin) {
+    $('*:contains("VIN")').each(function() {
+      const text = $(this).text().trim();
+      const vinMatch = text.match(/VIN:?\s*([A-HJ-NPR-Z0-9]{17})/i);
+      if (vinMatch && vinMatch[1]) {
+        vin = vinMatch[1].toUpperCase();
+        return false; // break the loop
+      }
+    });
+  }
+  console.log(`Found Nine Stars Auto VIN: ${vin}`);
+  
+  // Extract images - Nine Stars Auto often uses data-src for lazy loading
+  const images: string[] = [];
+  $('img[data-src], .large-photo img').each(function() {
+    const src = $(this).attr('data-src') || $(this).attr('src');
+    if (src && !images.includes(src) && isValidImageUrl(src)) {
+      console.log(`Found Nine Stars Auto image: ${src}`);
+      images.push(src);
+    }
+  });
+  
+  // If no specific dealer images found, try looking for any vehicle images
+  if (images.length === 0) {
+    $('.vehicle-images img, .vehicle-photo img, .thumbnail img').each(function() {
+      const src = $(this).attr('data-src') || $(this).attr('src');
+      if (src && !images.includes(src) && isValidImageUrl(src)) {
+        console.log(`Found Nine Stars Auto image from generic selectors: ${src}`);
+        images.push(src);
+      }
+    });
+  }
+  
+  // Try to find images in any script tags (often used for carousels)
+  if (images.length === 0) {
+    $('script').each(function() {
+      const scriptContent = $(this).html();
+      if (scriptContent && scriptContent.includes('image') && scriptContent.includes('http')) {
+        const matches = scriptContent.match(/(https?:\/\/[^"']+\.(jpg|jpeg|png|webp))/gi);
+        if (matches) {
+          for (const match of matches) {
+            if (!images.includes(match) && isValidImageUrl(match)) {
+              console.log(`Found Nine Stars Auto image in script: ${match}`);
+              images.push(match);
+            }
+          }
+        }
+      }
+    });
+  }
+  
+  // Construct vehicle object
+  const vehicle: InsertVehicle = {
+    dealershipId,
+    title: title || `${year} ${make} ${model}`,
+    make,
+    model,
+    year,
+    price,
+    mileage,
+    vin,
+    images,
+    location: dealerLocation, // Use location from dealership data
+    zipCode: dealerZipCode, // Use ZIP code from dealership data
+    originalListingUrl: url
+  };
+  
+  console.log(`Extracted Nine Stars Auto vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
+  return vehicle;
+}
+
+function extractGenericVehicle($: CheerioRoot, url: string, dealershipId: number, dealershipName: string, dealerLocation: string, dealerZipCode: string | null): InsertVehicle {
+  // Generic vehicle extraction logic
+  console.log(`Extracting generic vehicle data for ${dealershipName}`);
+  
+  // Extract title from common elements
+  let title = $('h1, .vehicle-title, .car-title, .listing-title, [class*="title"]').first().text().trim();
+  if (!title) {
+    // Look for structured data
+    $('script[type="application/ld+json"]').each(function() {
+      try {
+        const structuredData = JSON.parse($(this).html() || '{}');
+        if (structuredData['@type'] === 'Vehicle' || structuredData['@type'] === 'Car' || structuredData['@type'] === 'Product') {
+          title = structuredData.name || '';
+          return false; // break the loop
+        }
+      } catch (error) {
+        // Ignore JSON parse errors
+      }
+    });
+  }
+  console.log(`Found generic title: ${title}`);
+  
+  // Extract make, model, year
+  const titleParts = parseVehicleTitle(title);
+  let year = titleParts.year;
+  let make = titleParts.make;
+  let model = titleParts.model;
+  
+  // Extract price, mileage, vin and other details similar to other extractors...
+  
+  // Construct vehicle object
+  const vehicle: InsertVehicle = {
+    dealershipId,
+    title: title || `${year} ${make} ${model}`,
+    make,
+    model,
+    year,
+    price: 0, // This would be filled with actual extracted price
+    mileage: 0, // This would be filled with actual extracted mileage
+    vin: '', // This would be filled with actual extracted VIN
+    images: [], // This would be filled with actual extracted images
+    location: dealerLocation, // Use location from dealership data
+    zipCode: dealerZipCode, // Use ZIP code from dealership data
+    originalListingUrl: url
+  };
+  
+  return vehicle;
+}
