@@ -1,3 +1,4 @@
+import fetch from 'node-fetch';
 import { InsertVehicle } from '@shared/schema';
 import * as cheerio from 'cheerio';
 import { HttpsProxyAgent } from 'https-proxy-agent';
