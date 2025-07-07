@@ -4,6 +4,7 @@
  * 
  * Replace X with the ID of the Inspected Auto dealership
  */
+import fetch from 'node-fetch';
 
 console.log('To force a sync for Inspected Auto:');
 console.log('1. First login to the admin interface at http://localhost:5000/login');
