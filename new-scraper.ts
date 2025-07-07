@@ -1,6 +1,7 @@
 async function scrapeNovaAutolandVehicle(url: string, dealershipId: number, dealershipName: string): Promise<InsertVehicle | null> {
   console.log(`Processing Nova Autoland vehicle: ${url}`);
-  
+  import fetch from 'node-fetch';
+
   // Default values for vehicle
   let make = '';
   let model = '';
