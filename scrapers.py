@@ -1,3 +1,4 @@
+import fetch from 'node-fetch';
 import requests
 from bs4 import BeautifulSoup
 import time
